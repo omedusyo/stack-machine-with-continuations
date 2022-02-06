@@ -1,0 +1,29 @@
+elm-stuff/
+
+# Ignore temporary vim files.
+*.swp
+*.swo
+
+# Ignore my research
+research/
+
+# Ignore krita files
+*.kra
+*.kra~
+
+# npm
+node_modules/
+npm-debug.log
+# yarn
+yarn-error.log
+
+# temporary repl-session file
+tmp_repl.js
+tmp_repl.txt
+
+# webpack source-maps
+*.js.map
+
+dist/
+.cache/
+
