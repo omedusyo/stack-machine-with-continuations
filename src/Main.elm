@@ -624,7 +624,9 @@ gapY h =
 view : Model -> Html Msg
 view model =
     col []
-        [ H.select [ HA.css [ Css.width (Css.px 200) ] ]
+        [ H.div [] [ H.text "See ", H.a [ HA.href "https://github.com/omedusyo/stack-machine-with-continuations" ] [ H.text "github" ] ]
+        , gapY 10
+        , H.select [ HA.css [ Css.width (Css.px 200) ] ]
             (examples
                 |> List.map
                     (\ex ->
