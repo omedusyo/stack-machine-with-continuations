@@ -113,6 +113,7 @@ type Either a b
 
 fibIncrementalExplicit : State -> Either State ()
 fibIncrementalExplicit state =
+    -- Note that there's no recursion here
     case state of
         ( Call x, stack ) ->
             if x < 2 then

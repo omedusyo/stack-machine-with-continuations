@@ -1,10 +1,10 @@
 module Main exposing (..)
 
+import ArithmeticEvaluator
 import Browser
 import Browser.Events as BE
 import Css
 import Dict exposing (Dict)
-import ExplicitFibonacci
 import Html.Styled as H exposing (Html)
 import Html.Styled.Attributes as HA
 import Html.Styled.Events as HE
