@@ -163,7 +163,7 @@ fib x =
         fib (x - 1) + fib (x - 2)
 ```
 There are much more efficient implementations that use constant stack space,
-but the point of example is that the functions calls itself recursively twice.
+but the point of the example is that the functions calls itself recursively twice.
 It will illustrate the call stack nicely.
 Let us first look at what kind of a recursive process is generated for `x == 4`.
 The angle braces denote the currently focused computation
@@ -292,7 +292,17 @@ type alias Env = Dict VarName Value
 
 # Part 3: How do first class functions work? - Closures
 TODO
+TODO: show how to implement recursion by extending the closure's environment with itself
 
 # Part 4: Can we treat our stacks as just another value in our language? - Continuations
 TODO
+
+
+TODO: What about delimited continuations or algebraic effects and handlers? Or atleast exceptions?
+TODO: What about usual effects? printing/state/non-determinism?
+
+
+Related stuff
+* [Call-By-Push-Value](https://link.springer.com/book/10.1007/978-94-007-0954-6)
+* [Sequent Calculus: A Logic and a Language for Computation and Duality](https://www.semanticscholar.org/paper/Sequent-Calculus%3A-A-Logic-and-a-Language-for-and-Downen/f4d277f8bb599f0c60000b2fc59f1224b209e0a8)
 
