@@ -285,8 +285,14 @@ eval comp =
 ```
 
 # Part 2: Can we extend our language with Variables? - Environments
+TODO
+```
+type alias Env = Dict VarName Value 
+```
 
 # Part 3: How do first class functions work? - Closures
+TODO
 
 # Part 4: Can we treat our stacks as just another value in our language? - Continuations
+TODO
 
