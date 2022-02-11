@@ -276,6 +276,9 @@ viewValue val =
         StackValue _ _ ->
             viewHiddenValue "stack"
 
+        EnvValue _ ->
+            viewHiddenValue "env"
+
 
 viewHiddenValue : String -> Html Msg
 viewHiddenValue str =
@@ -366,6 +369,48 @@ viewRestoreStack html0 html1 =
         )
 
 
+viewLet : Html Msg -> VarName -> Html Msg -> Html Msg
+viewLet html0 var bodyHtml =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ viewKeyword "let"
+            , gapX w
+            , viewVariable var
+            , gapX w
+            , viewKeyword "="
+            , gapX w
+            , html0
+            , gapX w
+            , viewKeyword "in"
+            , gapX w
+            , bodyHtml
+            ]
+        )
+
+
+viewWithIn : Html Msg -> Html Msg -> Html Msg
+viewWithIn html0 html1 =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ viewKeyword "with"
+            , gapX w
+            , html0
+            , gapX w
+            , viewKeyword "in"
+            , gapX w
+            , html1
+            ]
+        )
+
+
 viewComputation : Computation -> Html Msg
 viewComputation comp =
     case comp of
@@ -401,6 +446,15 @@ viewComputation comp =
 
         RestoreStackWith computation0 computation1 ->
             viewRestoreStack (viewComputation computation0) (viewComputation computation1)
+
+        Let computation { var, body } ->
+            viewLet (viewComputation computation) var (viewComputation body)
+
+        GetEnv ->
+            viewKeyword "get-env"
+
+        WithIn computation0 computation1 ->
+            viewWithIn (viewComputation computation0) (viewComputation computation1)
 
 
 viewEnv : Env -> Html Msg
@@ -486,6 +540,13 @@ viewStackElement stackEl =
                     5
             in
             parens (alignedRow [] [ viewKeyword "restoreEnv", gapX w, viewHiddenValue "env" ])
+
+        -- Let binding
+        LetWithLeftHole { var, body } ->
+            viewLet viewHole var (viewComputation body)
+
+        WithInLeftHole computation1 ->
+            viewWithIn viewHole (viewComputation computation1)
 
 
 viewEmptyStack : Html Msg
@@ -573,6 +634,9 @@ viewRunTimeError err =
 
                 ExpectedStack ->
                     "Expected Stack"
+
+                ExpectedEnv ->
+                    "Expected Environment"
 
                 UnboundVarName varName ->
                     "Unbound variable name"

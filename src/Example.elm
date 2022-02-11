@@ -134,11 +134,56 @@ example6 =
         (add (c 1) true)
 
 
+example7 : Example
+example7 =
+    -- (let x = 3 in x + 1) + 5
+    example "let binding"
+        (add
+            (Let (c 3) { var = "x", body = add (VarUse "x") (c 1) })
+            (c 5)
+        )
+
+
+example8 : Example
+example8 =
+    -- let x = 3 in
+    --   get-env
+    example "get environment"
+        (Let (c 3)
+            { var = "x"
+            , body = GetEnv
+            }
+        )
+
+
+example9 : Example
+example9 =
+    -- let x = 3;
+    -- let e = get-env;
+    -- let x = 5;
+    -- (with e; x) + x
+    example "evaluating with saved environment 0"
+        (Let (c 3)
+            { var = "x"
+            , body =
+                Let GetEnv
+                    { var = "e"
+                    , body =
+                        Let (c 5)
+                            { var = "x"
+                            , body =
+                                add (WithIn (VarUse "e") (VarUse "x")) (VarUse "x")
+                            }
+                    }
+            }
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example0
+    example9
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7 ]

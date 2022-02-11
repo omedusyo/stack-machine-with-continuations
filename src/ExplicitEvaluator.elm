@@ -72,6 +72,8 @@ type Value
     | ClosureValue Env { var : VarName, body : Computation }
       -- Stack/Continuation
     | StackValue Env Stack
+      -- First class environments
+    | EnvValue Env
 
 
 type PrimitiveIntOperation2
@@ -89,11 +91,19 @@ type Computation
       -- Bool type
     | IfThenElse Computation { body : Computation } { body : Computation }
       -- Function type
-    | Lambda { var : VarName, body : Computation }
+    | Lambda { var : VarName, body : Computation } -- fn x -> body
     | Application Computation Computation
       -- Stack/Current Continuation
     | SaveStack { var : VarName, body : Computation }
-    | RestoreStackWith Computation Computation -- This is like function application, but we're "applying" a frozen stack `restoreStack k v`
+    | RestoreStackWith Computation Computation -- `restore-stack-with k` comp This is like function application, but we're "applying" a frozen stack `restoreStack k v`
+      -- First class environments
+    | Let Computation { var : VarName, body : Computation } -- let x = e; body
+      -- What's the point of having
+      --   save-env e; body
+      -- if you have the let-binding?
+      --   let e = get-env; body
+    | GetEnv
+    | WithIn Computation Computation -- with env in body
 
 
 type CurrentComputation
@@ -114,6 +124,9 @@ type StackElement
     | RestoreStackWithRightHole Value -- restoreStack V _
       -- Environment restoration after closure application/stack save is done
     | RestoreEnv Env
+      -- First class environments
+    | LetWithLeftHole { var : VarName, body : Computation } -- let x = _ in body
+    | WithInLeftHole Computation -- with _ in M
 
 
 type alias Stack =
@@ -132,6 +145,7 @@ type RunTimeError
     | ExpectedInteger
     | ExpectedClosure
     | ExpectedStack
+    | ExpectedEnv
     | UnboundVarName VarName
 
 
@@ -223,6 +237,19 @@ combineValWithTopOfStack env stack val stackEl =
         RestoreEnv envToBeRestored ->
             Ok { env = envToBeRestored, stack = stack, currentComputation = Value val }
 
+        -- First class environents
+        -- let-binding
+        LetWithLeftHole { var, body } ->
+            Ok { env = env |> insertEnv var val, stack = RestoreEnv env :: stack, currentComputation = Computation body }
+
+        WithInLeftHole computation1 ->
+            case val of
+                EnvValue env0 ->
+                    Ok { env = env0, stack = RestoreEnv env :: stack, currentComputation = Computation computation1 }
+
+                _ ->
+                    Err ExpectedEnv
+
 
 boolToConstant : Bool -> Constant
 boolToConstant b =
@@ -289,3 +316,13 @@ decompose env stack comp =
 
         RestoreStackWith computation0 computation1 ->
             Ok { env = env, stack = RestoreStackWithLeftHole computation1 :: stack, currentComputation = Computation computation0 }
+
+        --Environments
+        Let computation0 { var, body } ->
+            Ok { env = env, stack = LetWithLeftHole { var = var, body = body } :: stack, currentComputation = Computation computation0 }
+
+        GetEnv ->
+            Ok { env = env, stack = stack, currentComputation = Value (EnvValue env) }
+
+        WithIn computation0 computation1 ->
+            Ok { env = env, stack = WithInLeftHole computation1 :: stack, currentComputation = Computation computation0 }
