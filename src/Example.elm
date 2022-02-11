@@ -179,11 +179,26 @@ example9 =
         )
 
 
+example10 : Example
+example10 =
+    example "tuples 0"
+        (Tuple 3 [ c 0, add (c 1) (c 2), c 5 ])
+
+
+example11 : Example
+example11 =
+    example "tuples 2"
+        (Project
+            (Tuple 3 [ c 16, c 3, c 5 ])
+            1
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example9
+    example11
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11 ]

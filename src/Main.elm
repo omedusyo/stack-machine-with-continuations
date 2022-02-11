@@ -273,6 +273,9 @@ viewValue val =
         ClosureValue _ _ ->
             viewHiddenValue "closure"
 
+        TupleValue _ values ->
+            viewTuple (values |> List.map viewValue)
+
         StackValue _ _ ->
             viewHiddenValue "stack"
 
@@ -293,6 +296,16 @@ viewVariable varName =
 viewVariableUse : String -> Html Msg
 viewVariableUse varName =
     viewVariable varName
+
+
+viewTuple : List (Html Msg) -> Html Msg
+viewTuple htmlValues =
+    let
+        w =
+            10
+    in
+    parens
+        (alignedRow [] (htmlValues |> List.intersperse (row [] [ H.text ",", gapX w ])))
 
 
 parens : Html Msg -> Html Msg
@@ -350,6 +363,11 @@ viewLambda var htmlBody =
             5
     in
     parens (alignedRow [] [ viewKeyword "fn", gapX w, viewVariable var, gapX w, viewKeyword "->", gapX w, htmlBody ])
+
+
+viewProject : Html Msg -> Int -> Html Msg
+viewProject html0 k =
+    alignedRow [] [ html0, viewKeyword ".", H.text (String.fromInt k) ]
 
 
 viewRestoreStack : Html Msg -> Html Msg -> Html Msg
@@ -435,6 +453,12 @@ viewComputation comp =
 
         Application computation0 computation1 ->
             viewApplication (viewComputation computation0) (viewComputation computation1)
+
+        Tuple _ computations ->
+            viewTuple (computations |> List.map viewComputation)
+
+        Project computation k ->
+            viewProject (viewComputation computation) k
 
         -- Stack/Current Continuation
         SaveStack { var, body } ->
@@ -523,6 +547,19 @@ viewStackElement stackEl =
         ApplicationRightHole value0 ->
             -- [Value _]
             viewApplication (viewValue value0) viewHole
+
+        -- Tuple
+        TupleWithHole _ reversedValues computations ->
+            viewTuple
+                ((List.reverse reversedValues |> List.map viewValue)
+                    ++ viewHole
+                    :: (computations
+                            |> List.map viewComputation
+                       )
+                )
+
+        ProjectWithHole k ->
+            viewProject viewHole k
 
         -- Stack/Current Continuation
         RestoreStackWithLeftHole computation1 ->
@@ -632,11 +669,26 @@ viewRunTimeError err =
                 ExpectedClosure ->
                     "Expected Closure"
 
+                ExpectedTuple ->
+                    "Expected Tuple"
+
                 ExpectedStack ->
                     "Expected Stack"
 
                 ExpectedEnv ->
                     "Expected Environment"
+
+                TupleArityMismatch { expected, got } ->
+                    String.concat
+                        [ "Ill-formed tuple: The tuple is supposed to be of size "
+                        , String.fromInt expected
+                        , " but in it we have "
+                        , String.fromInt got
+                        , " elements"
+                        ]
+
+                CantProject { tupleSize, index } ->
+                    Debug.todo ""
 
                 UnboundVarName varName ->
                     "Unbound variable name"

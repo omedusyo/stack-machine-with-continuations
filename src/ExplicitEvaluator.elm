@@ -1,6 +1,7 @@
 module ExplicitEvaluator exposing (..)
 
 import Dict exposing (..)
+import List.Extra as List
 
 
 
@@ -70,6 +71,8 @@ type Value
     = ConstantValue Constant
       -- Closure
     | ClosureValue Env { var : VarName, body : Computation }
+      -- Tuple
+    | TupleValue Int (List Value) -- invariant: for `TupleValue n values` we require `n == List.length values`
       -- Stack/Continuation
     | StackValue Env Stack
       -- First class environments
@@ -93,6 +96,11 @@ type Computation
       -- Function type
     | Lambda { var : VarName, body : Computation } -- fn x -> body
     | Application Computation Computation
+      -- Tuple Type
+      -- (M0, M1, M2)   <-->   Tuple 3 [M0, M1, M2]
+    | Tuple Int (List Computation) -- invariant: for `Tuple n computations` we require `n == List.length compuations`
+      -- (M0, M1, M2).1 ~> M1
+    | Project Computation Int
       -- Stack/Current Continuation
     | SaveStack { var : VarName, body : Computation }
     | RestoreStackWith Computation Computation -- `restore-stack-with k` comp This is like function application, but we're "applying" a frozen stack `restoreStack k v`
@@ -119,6 +127,9 @@ type StackElement
       -- Application
     | ApplicationLeftHole Computation -- [_ M]
     | ApplicationRightHole Value -- [Value _]
+      -- Tuple
+    | TupleWithHole Int (List Value) (List Computation) -- invariant: for `TupleWithHole n reversedValues computations` we require `n == 1 + List.length reversedValues + List.length computations
+    | ProjectWithHole Int
       -- Stack/Current Continuation
     | RestoreStackWithLeftHole Computation -- restoreStack _ M
     | RestoreStackWithRightHole Value -- restoreStack V _
@@ -144,8 +155,11 @@ type RunTimeError
     = ExpectedBoolean
     | ExpectedInteger
     | ExpectedClosure
+    | ExpectedTuple
     | ExpectedStack
     | ExpectedEnv
+    | TupleArityMismatch { expected : Int, got : Int }
+    | CantProject { tupleSize : Int, index : Int }
     | UnboundVarName VarName
 
 
@@ -219,6 +233,28 @@ combineValWithTopOfStack env stack val stackEl =
 
                 _ ->
                     Err ExpectedClosure
+
+        -- Tuples
+        TupleWithHole n reversedValues computations0 ->
+            case computations0 of
+                [] ->
+                    Ok { env = env, stack = stack, currentComputation = Value (TupleValue n (List.reverse (val :: reversedValues))) }
+
+                computation0 :: computations1 ->
+                    Ok { env = env, stack = TupleWithHole n (val :: reversedValues) computations1 :: stack, currentComputation = Computation computation0 }
+
+        ProjectWithHole k ->
+            case val of
+                TupleValue n values ->
+                    case List.getAt k values of
+                        Just val0 ->
+                            Ok { env = env, stack = stack, currentComputation = Value val0 }
+
+                        Nothing ->
+                            Err (CantProject { tupleSize = n, index = k })
+
+                _ ->
+                    Err ExpectedTuple
 
         -- Stack/Current Continuation
         RestoreStackWithLeftHole computation1 ->
@@ -307,6 +343,32 @@ decompose env stack comp =
         -- Function type elimination
         Application computation0 computation1 ->
             Ok { env = env, stack = ApplicationLeftHole computation1 :: stack, currentComputation = Computation computation0 }
+
+        -- Tuple Construction
+        Tuple n computations0 ->
+            let
+                numOfComputations =
+                    List.length computations0
+            in
+            if n /= numOfComputations then
+                Err (TupleArityMismatch { expected = n, got = numOfComputations })
+
+            else
+                case computations0 of
+                    [] ->
+                        Ok { env = env, stack = stack, currentComputation = Value (TupleValue 0 []) }
+
+                    computation0 :: computations1 ->
+                        Ok
+                            { env = env
+                            , stack =
+                                TupleWithHole n [] computations1
+                                    :: stack
+                            , currentComputation = Computation computation0
+                            }
+
+        Project computation0 k ->
+            Ok { env = env, stack = ProjectWithHole k :: stack, currentComputation = Computation computation0 }
 
         -- Stack/Current Continuation
         SaveStack { var, body } ->
