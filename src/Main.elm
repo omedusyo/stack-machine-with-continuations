@@ -243,6 +243,31 @@ intOperation2ToString op =
             "<"
 
 
+predicateToString : Predicate -> String
+predicateToString pred =
+    case pred of
+        IsInt ->
+            "isInt"
+
+        IsBool ->
+            "isBool"
+
+        IsString ->
+            "isString"
+
+        IsClosure ->
+            "isClosure"
+
+        IsTuple ->
+            "isTuple"
+
+        IsStack ->
+            "isStack"
+
+        IsEnv ->
+            "isEnv"
+
+
 viewKeyword : String -> Html Msg
 viewKeyword keyword =
     H.div [ HA.css [ Css.fontWeight Css.bolder ] ] [ H.text keyword ]
@@ -335,6 +360,21 @@ viewIntOperation2Application op arg0_html arg1_html =
             , H.text (intOperation2ToString op)
             , gapX w
             , arg1_html
+            ]
+        )
+
+
+viewPredicateApplication : Predicate -> Html Msg -> Html Msg
+viewPredicateApplication pred html0 =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ H.text (predicateToString pred)
+            , gapX w
+            , html0
             ]
         )
 
@@ -466,6 +506,9 @@ viewComputation comp =
         PrimitiveIntOperation2 op computation0 computation1 ->
             viewIntOperation2Application op (viewComputation computation0) (viewComputation computation1)
 
+        PredicateApplication pred computation0 ->
+            viewPredicateApplication pred (viewComputation computation0)
+
         -- Bool type
         IfThenElse computation leftBranch rightBranch ->
             viewIfThenElse (viewComputation computation) (viewComputation leftBranch.body) (viewComputation rightBranch.body)
@@ -559,6 +602,9 @@ viewStackElement stackEl =
         PrimitiveIntOperation2RightHole op value0 ->
             -- op(V, _)
             viewIntOperation2Application op (viewValue value0) viewHole
+
+        PredicateApplicationHole pred ->
+            viewPredicateApplication pred viewHole
 
         -- Bool
         IfThenElseHole leftBranch rightBranch ->

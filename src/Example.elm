@@ -253,11 +253,52 @@ example13 =
         )
 
 
+example14 : Example
+example14 =
+    -- if isInt 5 then 3 else 5
+    example "predicates"
+        (IfThenElse (PredicateApplication IsInt (str "hello")) { body = c 3 } { body = c 5 })
+
+
+example15 : Example
+example15 =
+    -- let val = save-stack k k;
+    --   if isStack? k then
+    --     log "First";
+    --     log val;
+    --     restore-stack 5
+    --   else
+    --     log "Second";
+    --     log val;
+    --     ()
+    example "Binding a stack to a variable"
+        (Let
+            (SaveStack { var = "k", body = VarUse "k" })
+            { var = "val"
+            , body =
+                IfThenElse
+                    (PredicateApplication IsStack (VarUse "val"))
+                    { body =
+                        Log (str "First")
+                            (Log (VarUse "val")
+                                (RestoreStackWith (VarUse "val") (c 5))
+                            )
+                    }
+                    { body =
+                        Log (str "Second")
+                            (Log (VarUse "val")
+                                empty
+                            )
+                    }
+            }
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example13
+    example15
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15 ]

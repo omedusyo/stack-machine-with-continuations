@@ -87,12 +87,24 @@ type PrimitiveIntOperation2
     | LessThan
 
 
+type Predicate
+    = IsInt
+    | IsBool
+    | IsString
+    | IsClosure
+    | IsTuple
+    | IsStack
+    | IsEnv
+
+
 type Computation
     = ConstantComputation Constant
       -- Variable use
     | VarUse VarName
       -- Primitive arithmetic
     | PrimitiveIntOperation2 PrimitiveIntOperation2 Computation Computation
+      -- Primitive predicates
+    | PredicateApplication Predicate Computation
       -- Bool type
     | IfThenElse Computation { body : Computation } { body : Computation }
       -- Function type
@@ -126,6 +138,7 @@ type CurrentComputation
 type StackElement
     = PrimitiveIntOperation2LeftHole PrimitiveIntOperation2 Computation -- op(_, M)
     | PrimitiveIntOperation2RightHole PrimitiveIntOperation2 Value -- op(V, _)
+    | PredicateApplicationHole Predicate -- predicate _
       -- Bool
     | IfThenElseHole { body : Computation } { body : Computation } -- if _ then M else M'
       -- Application
@@ -201,6 +214,84 @@ smallStepEval ({ env, stack, currentComputation, console } as state) =
                 |> Result.map Left
 
 
+applyPredicate : Predicate -> Value -> Value
+applyPredicate pred val =
+    (ConstantValue << boolToConstant)
+        (case val of
+            ConstantValue constant ->
+                case constant of
+                    IntConst _ ->
+                        case pred of
+                            IsInt ->
+                                True
+
+                            _ ->
+                                False
+
+                    -- Bool
+                    TrueConst ->
+                        case pred of
+                            IsBool ->
+                                True
+
+                            _ ->
+                                False
+
+                    FalseConst ->
+                        case pred of
+                            IsBool ->
+                                True
+
+                            _ ->
+                                False
+
+                    -- String
+                    StringConst _ ->
+                        case pred of
+                            IsString ->
+                                True
+
+                            _ ->
+                                False
+
+            -- Closure
+            ClosureValue _ _ ->
+                case pred of
+                    IsClosure ->
+                        True
+
+                    _ ->
+                        False
+
+            -- Tuple
+            TupleValue _ _ ->
+                case pred of
+                    IsTuple ->
+                        True
+
+                    _ ->
+                        False
+
+            -- Stack/Continuation
+            StackValue _ _ ->
+                case IsStack of
+                    IsStack ->
+                        True
+
+                    _ ->
+                        False
+
+            -- First class environments
+            EnvValue _ ->
+                case pred of
+                    IsEnv ->
+                        True
+
+                    _ ->
+                        False
+        )
+
+
 combineValWithTopOfStack : Env -> Stack -> Console -> Value -> StackElement -> Result RunTimeError State
 combineValWithTopOfStack env stack console val stackEl =
     -- The only interesting cases are `PrimitiveIntOperation2RightHole`, `IfThenElseHole`, `ApplicationRightHole`, `RestoreStackWithRightHole`, and `RestoreEnv`
@@ -215,6 +306,9 @@ combineValWithTopOfStack env stack console val stackEl =
 
                 _ ->
                     Err ExpectedInteger
+
+        PredicateApplicationHole pred ->
+            Ok { env = env, stack = stack, currentComputation = Value (applyPredicate pred val), console = console }
 
         -- Bool
         IfThenElseHole leftBranch rightBranch ->
@@ -345,6 +439,9 @@ decompose env stack console comp =
         -- Primitive arithmetic
         PrimitiveIntOperation2 op computation0 computation1 ->
             Ok { env = env, stack = PrimitiveIntOperation2LeftHole op computation1 :: stack, currentComputation = Computation computation0, console = console }
+
+        PredicateApplication pred computation0 ->
+            Ok { env = env, stack = PredicateApplicationHole pred :: stack, currentComputation = Computation computation0, console = console }
 
         -- Bool
         IfThenElse computation leftBranch rightBranch ->
