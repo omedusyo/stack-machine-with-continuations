@@ -42,6 +42,7 @@ modelFromExample ex =
                 { env = ex.env
                 , stack = []
                 , currentComputation = Computation ex.comp
+                , console = []
                 }
             }
     , savedStates = []
@@ -260,6 +261,9 @@ viewConstant const =
 
                 FalseConst ->
                     "False"
+
+                StringConst s ->
+                    String.concat [ "\"", s, "\"" ]
             )
         ]
 
@@ -429,6 +433,25 @@ viewWithIn html0 html1 =
         )
 
 
+viewLog : Html Msg -> Html Msg -> Html Msg
+viewLog html0 html1 =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ viewKeyword "log"
+            , gapX w
+            , html0
+            , gapX w
+            , viewKeyword "; "
+            , gapX w
+            , html1
+            ]
+        )
+
+
 viewComputation : Computation -> Html Msg
 viewComputation comp =
     case comp of
@@ -479,6 +502,9 @@ viewComputation comp =
 
         WithIn computation0 computation1 ->
             viewWithIn (viewComputation computation0) (viewComputation computation1)
+
+        Log computation0 computation1 ->
+            viewLog (viewComputation computation0) (viewComputation computation1)
 
 
 viewEnv : Env -> Html Msg
@@ -585,6 +611,10 @@ viewStackElement stackEl =
         WithInLeftHole computation1 ->
             viewWithIn viewHole (viewComputation computation1)
 
+        -- Console
+        LogLeftHole computation1 ->
+            viewLog viewHole (viewComputation computation1)
+
 
 viewEmptyStack : Html Msg
 viewEmptyStack =
@@ -613,13 +643,25 @@ viewStack stack =
         )
 
 
+viewConsole : Console -> Html Msg
+viewConsole console =
+    col []
+        (console
+            |> List.reverse
+            |> List.map
+                (\val ->
+                    viewValue val
+                )
+        )
+
+
 viewTypeOfCurrentComputation : String -> Html Msg
 viewTypeOfCurrentComputation keyword =
     H.div [ HA.css [ Css.fontWeight Css.bold, Css.color color.blue ] ] [ H.text keyword ]
 
 
 viewState : State -> Bool -> Html Msg
-viewState { env, stack, currentComputation } isTerminated =
+viewState { env, stack, currentComputation, console } isTerminated =
     let
         w =
             Css.px 120
@@ -651,6 +693,10 @@ viewState { env, stack, currentComputation } isTerminated =
         , row []
             [ H.div [ HA.css [ Css.width w ] ] [ H.text "Stack" ]
             , viewStack stack
+            ]
+        , row []
+            [ H.div [ HA.css [ Css.width w ] ] [ H.text "Console" ]
+            , viewConsole console
             ]
         ]
 

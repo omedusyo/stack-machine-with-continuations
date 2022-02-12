@@ -25,6 +25,11 @@ c x =
     ConstantComputation (IntConst x)
 
 
+str : String -> Computation
+str s =
+    ConstantComputation (StringConst s)
+
+
 cv : Int -> Value
 cv x =
     ConstantValue (IntConst x)
@@ -53,6 +58,18 @@ mul c0 c1 =
 lt : Computation -> Computation -> Computation
 lt c0 c1 =
     PrimitiveIntOperation2 LessThan c0 c1
+
+
+empty =
+    Tuple 0 []
+
+
+pair a b =
+    Tuple 2 [ a, b ]
+
+
+triple a0 a1 a2 =
+    Tuple 3 [ a0, a1, a2 ]
 
 
 example0 : Example
@@ -194,11 +211,53 @@ example11 =
         )
 
 
+example12 : Example
+example12 =
+    example "console"
+        (Log (str "hello")
+            (Log (c 1)
+                (c 2)
+            )
+        )
+
+
+example13 : Example
+example13 =
+    -- let val =
+    --   save-stack k ->
+    --     log "Executed"
+    --     (restore-stack k 5;
+    --     , log "Not executed" ()
+    --     ).1;
+    --   log-ln val;
+    --   ()
+    example "call/cc with printing"
+        (Let
+            (SaveStack
+                { var = "k"
+                , body =
+                    Log (str "Executed")
+                        (Project
+                            (pair
+                                (RestoreStackWith (VarUse "k") (c 5))
+                                (Log (str "Not executed") empty)
+                            )
+                            1
+                        )
+                }
+            )
+            { var = "val"
+            , body =
+                Log (VarUse "val") empty
+            }
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example11
+    example13
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13 ]
