@@ -349,11 +349,13 @@ viewTagged tag htmlValues =
             viewTag tag
 
         _ ->
-            alignedRow []
-                [ viewTag tag
-                , parens
-                    (alignedRow [] (htmlValues |> List.intersperse (row [] [ H.text ",", gapX w ])))
-                ]
+            parens
+                (alignedRow []
+                    [ viewTag tag
+                    , gapX w
+                    , alignedRow [] (htmlValues |> List.intersperse (gapX w))
+                    ]
+                )
 
 
 viewMatchTagged : Html Msg -> List { pattern : Html Msg, body : Html Msg } -> Html Msg
