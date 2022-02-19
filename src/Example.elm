@@ -281,17 +281,13 @@ example15 =
                     (VarUse "val")
                     [ { pattern = TagPattern "first" 1 [ "k" ]
                       , body =
-                            Log (str "First")
-                                (Log (VarUse "val")
-                                    (RestoreStackWith (VarUse "k") (Tagged "second" 1 [ c 5 ]))
-                                )
+                            Log (VarUse "val")
+                                (RestoreStackWith (VarUse "k") (Tagged "second" 1 [ c 5 ]))
                       }
                     , { pattern = TagPattern "second" 1 [ "x" ]
                       , body =
-                            Log (str "Second")
-                                (Log (VarUse "x")
-                                    empty
-                                )
+                            Log (VarUse "val")
+                                empty
                       }
                     ]
             }
