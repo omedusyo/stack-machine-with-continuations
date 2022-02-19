@@ -296,24 +296,30 @@ example15 =
 
 example16 : Example
 example16 =
+    -- :just(3)
     example "Tagged values 0"
         (Tagged "just" 1 [ c 3 ])
 
 
 example17 : Example
 example17 =
+    -- :nothing
     example "Tagged values 1"
         (Tagged "nothing" 0 [])
 
 
 example18 : Example
 example18 =
+    -- :cons(73, :cons(30, :empty))
     example "Tagged values 2"
-        (Tagged "cons" 2 [ c 1, Tagged "cons" 2 [ c 2, Tagged "empty" 0 [] ] ])
+        (Tagged "cons" 73 [ c 1, Tagged "cons" 2 [ c 30, Tagged "empty" 0 [] ] ])
 
 
 example19 : Example
 example19 =
+    -- case :just(1) of
+    --   :nothing -> 0
+    --   :just(x) -> x + 20
     example "Tagged values 3"
         (MatchTagged
             (Tagged "just" 1 [ c 5 ])
@@ -321,7 +327,7 @@ example19 =
               , body = c 5
               }
             , { pattern = TagPattern "just" 1 [ "x" ]
-              , body = c 7
+              , body = add (VarUse "x") (c 20)
               }
             ]
         )
