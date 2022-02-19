@@ -262,34 +262,38 @@ example14 =
 
 example15 : Example
 example15 =
-    -- let val = save-stack k k;
-    --   if isStack? k then
+    -- let val = :first (save-stack k k);
+    -- case val of
+    --   :first k ->
     --     log "First";
-    --     log val;
-    --     restore-stack 5
-    --   else
+    --     log k;
+    --     restore-stack k (:second 5)
+    --   :second x
     --     log "Second";
-    --     log val;
+    --     log x;
     --     ()
     example "Binding a stack to a variable"
         (Let
-            (SaveStack { var = "k", body = VarUse "k" })
+            (SaveStack { var = "k", body = Tagged "first" 1 [ VarUse "k" ] })
             { var = "val"
             , body =
-                IfThenElse
-                    (PredicateApplication IsStack (VarUse "val"))
-                    { body =
-                        Log (str "First")
-                            (Log (VarUse "val")
-                                (RestoreStackWith (VarUse "val") (c 5))
-                            )
-                    }
-                    { body =
-                        Log (str "Second")
-                            (Log (VarUse "val")
-                                empty
-                            )
-                    }
+                MatchTagged
+                    (VarUse "val")
+                    [ { pattern = TagPattern "first" 1 [ "k" ]
+                      , body =
+                            Log (str "First")
+                                (Log (VarUse "val")
+                                    (RestoreStackWith (VarUse "k") (Tagged "second" 1 [ c 5 ]))
+                                )
+                      }
+                    , { pattern = TagPattern "second" 1 [ "x" ]
+                      , body =
+                            Log (str "Second")
+                                (Log (VarUse "x")
+                                    empty
+                                )
+                      }
+                    ]
             }
         )
 
@@ -312,7 +316,7 @@ example18 : Example
 example18 =
     -- :cons(73, :cons(30, :empty))
     example "Tagged values 2"
-        (Tagged "cons" 73 [ c 1, Tagged "cons" 2 [ c 30, Tagged "empty" 0 [] ] ])
+        (Tagged "cons" 2 [ c 73, Tagged "cons" 2 [ c 30, Tagged "empty" 0 [] ] ])
 
 
 example19 : Example
@@ -335,7 +339,7 @@ example19 =
 
 defaultExample : Example
 defaultExample =
-    example19
+    example15
 
 
 examples : List Example
