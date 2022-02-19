@@ -258,6 +258,9 @@ predicateToString pred =
         IsClosure ->
             "isClosure"
 
+        IsTagged ->
+            "isTagged"
+
         IsTuple ->
             "isTuple"
 
@@ -302,6 +305,9 @@ viewValue val =
         ClosureValue _ _ ->
             viewHiddenValue "closure"
 
+        TaggedValue tag _ values ->
+            viewTagged tag (values |> List.map viewValue)
+
         TupleValue _ values ->
             viewTuple (values |> List.map viewValue)
 
@@ -325,6 +331,67 @@ viewVariable varName =
 viewVariableUse : String -> Html Msg
 viewVariableUse varName =
     viewVariable varName
+
+
+viewTag : Tag -> Html Msg
+viewTag tag =
+    H.div [ HA.css [ Css.color color.green ] ] [ H.text (":" ++ tag) ]
+
+
+viewTagged : Tag -> List (Html Msg) -> Html Msg
+viewTagged tag htmlValues =
+    let
+        w =
+            10
+    in
+    case htmlValues of
+        [] ->
+            viewTag tag
+
+        _ ->
+            alignedRow []
+                [ viewTag tag
+                , parens
+                    (alignedRow [] (htmlValues |> List.intersperse (row [] [ H.text ",", gapX w ])))
+                ]
+
+
+viewMatchTagged : Html Msg -> List { pattern : Html Msg, body : Html Msg } -> Html Msg
+viewMatchTagged html0 branchesHtml =
+    let
+        w =
+            5
+
+        viewBranch : Html Msg -> Html Msg -> Html Msg
+        viewBranch patternHtml bodyHtml =
+            alignedRow []
+                [ patternHtml
+                , gapX w
+                , viewKeyword "->"
+                , gapX w
+                , bodyHtml
+                ]
+    in
+    parens
+        (alignedRow []
+            (List.concat
+                [ [ viewKeyword "case", gapX w, html0, gapX w, viewKeyword "of", gapX w ]
+                , branchesHtml
+                    |> List.map (\{ pattern, body } -> viewBranch pattern body)
+                    |> List.intersperse (row [] [ gapX w, H.text "|", gapX w ])
+                ]
+            )
+        )
+
+
+viewPattern : Pattern -> Html Msg
+viewPattern pattern =
+    case pattern of
+        TagPattern tag n vars ->
+            viewTagged tag (vars |> List.map viewVariable)
+
+        AnyPattern ->
+            viewVariable "_"
 
 
 viewTuple : List (Html Msg) -> Html Msg
@@ -520,6 +587,20 @@ viewComputation comp =
         Application computation0 computation1 ->
             viewApplication (viewComputation computation0) (viewComputation computation1)
 
+        -- Tagged Computations
+        Tagged tag n computations ->
+            viewTagged tag (computations |> List.map viewComputation)
+
+        MatchTagged computation branches ->
+            viewMatchTagged (viewComputation computation)
+                (branches
+                    |> List.map
+                        (\{ pattern, body } ->
+                            { pattern = viewPattern pattern, body = viewComputation body }
+                        )
+                )
+
+        -- Tuple Type
         Tuple _ computations ->
             viewTuple (computations |> List.map viewComputation)
 
@@ -619,6 +700,25 @@ viewStackElement stackEl =
         ApplicationRightHole value0 ->
             -- [Value _]
             viewApplication (viewValue value0) viewHole
+
+        -- TaggedComputation
+        TaggedWithHole tag n reversedValues computations ->
+            viewTagged tag
+                ((List.reverse reversedValues |> List.map viewValue)
+                    ++ viewHole
+                    :: (computations
+                            |> List.map viewComputation
+                       )
+                )
+
+        MatchTaggedWithHole branches ->
+            viewMatchTagged viewHole
+                (branches
+                    |> List.map
+                        (\{ pattern, body } ->
+                            { pattern = viewPattern pattern, body = viewComputation body }
+                        )
+                )
 
         -- Tuple
         TupleWithHole _ reversedValues computations ->
@@ -761,6 +861,12 @@ viewRunTimeError err =
                 ExpectedClosure ->
                     "Expected Closure"
 
+                ExpectedTaggedValue ->
+                    "Expected Tagged Value"
+
+                MatchNotFound ->
+                    "Match not found"
+
                 ExpectedTuple ->
                     "Expected Tuple"
 
@@ -769,6 +875,15 @@ viewRunTimeError err =
 
                 ExpectedEnv ->
                     "Expected Environment"
+
+                TaggedComputationArityMismatch { expected, got } ->
+                    String.concat
+                        [ "Ill-formed tagged value: The tuple is supposed to be of size "
+                        , String.fromInt expected
+                        , " but in it we have "
+                        , String.fromInt got
+                        , " elements"
+                        ]
 
                 TupleArityMismatch { expected, got } ->
                     String.concat
@@ -780,7 +895,13 @@ viewRunTimeError err =
                         ]
 
                 CantProject { tupleSize, index } ->
-                    Debug.todo ""
+                    String.concat
+                        [ "Out of bounds of a tuple: The tupple is supposed to be of size "
+                        , String.fromInt tupleSize
+                        , " but you're trying to get its "
+                        , String.fromInt index
+                        , "th element (0-based indexing)"
+                        ]
 
                 UnboundVarName varName ->
                     "Unbound variable name"

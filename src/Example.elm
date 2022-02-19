@@ -294,11 +294,44 @@ example15 =
         )
 
 
+example16 : Example
+example16 =
+    example "Tagged values 0"
+        (Tagged "just" 1 [ c 3 ])
+
+
+example17 : Example
+example17 =
+    example "Tagged values 1"
+        (Tagged "nothing" 0 [])
+
+
+example18 : Example
+example18 =
+    example "Tagged values 2"
+        (Tagged "cons" 2 [ c 1, Tagged "cons" 2 [ c 2, Tagged "empty" 0 [] ] ])
+
+
+example19 : Example
+example19 =
+    example "Tagged values 3"
+        (MatchTagged
+            (Tagged "just" 1 [ c 5 ])
+            [ { pattern = TagPattern "nothing" 0 []
+              , body = c 5
+              }
+            , { pattern = TagPattern "just" 1 [ "x" ]
+              , body = c 7
+              }
+            ]
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example15
+    example19
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19 ]

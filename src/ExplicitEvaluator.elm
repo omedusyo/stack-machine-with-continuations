@@ -26,6 +26,21 @@ removeLast xs0 =
             x :: removeLast xs1
 
 
+find : (a -> Maybe b) -> List a -> Maybe b
+find f xs0 =
+    case xs0 of
+        [] ->
+            Nothing
+
+        x :: xs1 ->
+            case f x of
+                Just y ->
+                    Just y
+
+                Nothing ->
+                    find f xs1
+
+
 
 -- ===Stack Machine===
 
@@ -54,6 +69,13 @@ insertEnv varName val env =
             )
 
 
+insertsEnv : List ( VarName, Value ) -> Env -> Env
+insertsEnv bindings env =
+    List.foldl (\( varName, val ) envState -> insertEnv varName val envState)
+        env
+        bindings
+
+
 getEnv : VarName -> Env -> Maybe Value
 getEnv varName env =
     env |> Dict.get varName |> Maybe.andThen List.head
@@ -73,6 +95,8 @@ type Value
     = ConstantValue Constant
       -- Closure
     | ClosureValue Env { var : VarName, body : Computation }
+      -- Tagged Value
+    | TaggedValue Tag Int (List Value)
       -- Tuple
     | TupleValue Int (List Value) -- invariant: for `TupleValue n values` we require `n == List.length values`
       -- Stack/Continuation
@@ -92,9 +116,19 @@ type Predicate
     | IsBool
     | IsString
     | IsClosure
+    | IsTagged
     | IsTuple
     | IsStack
     | IsEnv
+
+
+type alias Tag =
+    String
+
+
+type Pattern
+    = TagPattern Tag Int (List VarName)
+    | AnyPattern
 
 
 type Computation
@@ -110,6 +144,9 @@ type Computation
       -- Function type
     | Lambda { var : VarName, body : Computation } -- fn x -> body
     | Application Computation Computation
+      -- Tagged Computations
+    | Tagged Tag Int (List Computation)
+    | MatchTagged Computation (List { pattern : Pattern, body : Computation })
       -- Tuple Type
       -- (M0, M1, M2)   <-->   Tuple 3 [M0, M1, M2]
     | Tuple Int (List Computation) -- invariant: for `Tuple n computations` we require `n == List.length compuations`
@@ -144,6 +181,9 @@ type StackElement
       -- Application
     | ApplicationLeftHole Computation -- [_ M]
     | ApplicationRightHole Value -- [Value _]
+      -- TaggedComputation
+    | TaggedWithHole Tag Int (List Value) (List Computation)
+    | MatchTaggedWithHole (List { pattern : Pattern, body : Computation })
       -- Tuple
     | TupleWithHole Int (List Value) (List Computation) -- invariant: for `TupleWithHole n reversedValues computations` we require `n == 1 + List.length reversedValues + List.length computations
     | ProjectWithHole Int
@@ -179,9 +219,12 @@ type RunTimeError
     = ExpectedBoolean
     | ExpectedInteger
     | ExpectedClosure
+    | ExpectedTaggedValue
+    | MatchNotFound
     | ExpectedTuple
     | ExpectedStack
     | ExpectedEnv
+    | TaggedComputationArityMismatch { expected : Int, got : Int }
     | TupleArityMismatch { expected : Int, got : Int }
     | CantProject { tupleSize : Int, index : Int }
     | UnboundVarName VarName
@@ -263,6 +306,14 @@ applyPredicate pred val =
                     _ ->
                         False
 
+            TaggedValue _ _ _ ->
+                case pred of
+                    IsTagged ->
+                        True
+
+                    _ ->
+                        False
+
             -- Tuple
             TupleValue _ _ ->
                 case pred of
@@ -338,6 +389,28 @@ combineValWithTopOfStack env stack console val stackEl =
 
                 _ ->
                     Err ExpectedClosure
+
+        -- TaggedComputation
+        TaggedWithHole tag n reversedValues computations0 ->
+            case computations0 of
+                [] ->
+                    Ok { env = env, stack = stack, currentComputation = Value (TaggedValue tag n (List.reverse (val :: reversedValues))), console = console }
+
+                computation0 :: computations1 ->
+                    Ok { env = env, stack = TaggedWithHole tag n (val :: reversedValues) computations1 :: stack, currentComputation = Computation computation0, console = console }
+
+        MatchTaggedWithHole branches ->
+            case val of
+                TaggedValue tag n values ->
+                    case matchPatternWithBranch tag n values branches of
+                        Just { bindings, body } ->
+                            Ok { env = env |> insertsEnv bindings, stack = RestoreEnv env :: stack, currentComputation = Computation body, console = console }
+
+                        Nothing ->
+                            Err MatchNotFound
+
+                _ ->
+                    Err ExpectedTaggedValue
 
         -- Tuples
         TupleWithHole n reversedValues computations0 ->
@@ -456,6 +529,33 @@ decompose env stack console comp =
         Application computation0 computation1 ->
             Ok { env = env, stack = ApplicationLeftHole computation1 :: stack, currentComputation = Computation computation0, console = console }
 
+        -- Tagged Computations
+        Tagged tag n computations0 ->
+            let
+                numOfComputations =
+                    List.length computations0
+            in
+            if n /= numOfComputations then
+                Err (TaggedComputationArityMismatch { expected = n, got = numOfComputations })
+
+            else
+                case computations0 of
+                    [] ->
+                        Ok { env = env, stack = stack, currentComputation = Value (TaggedValue tag 0 []), console = console }
+
+                    computation0 :: computations1 ->
+                        Ok
+                            { env = env
+                            , stack =
+                                TaggedWithHole tag n [] computations1
+                                    :: stack
+                            , currentComputation = Computation computation0
+                            , console = console
+                            }
+
+        MatchTagged computation0 branches ->
+            Ok { env = env, stack = MatchTaggedWithHole branches :: stack, currentComputation = Computation computation0, console = console }
+
         -- Tuple Construction
         Tuple n computations0 ->
             let
@@ -505,3 +605,28 @@ decompose env stack console comp =
         -- Console
         Log computation0 computation1 ->
             Ok { env = env, stack = LogLeftHole computation1 :: stack, currentComputation = Computation computation0, console = console }
+
+
+matchPatternWithBranch : Tag -> Int -> List Value -> List { pattern : Pattern, body : Computation } -> Maybe { bindings : List ( VarName, Value ), body : Computation }
+matchPatternWithBranch tag arity values branches =
+    branches
+        |> find
+            (\{ pattern, body } ->
+                pattern
+                    |> matchPattern tag arity values
+                    |> Maybe.map (\bindings -> { bindings = bindings, body = body })
+            )
+
+
+matchPattern : Tag -> Int -> List Value -> Pattern -> Maybe (List ( VarName, Value ))
+matchPattern tag arity values pattern =
+    case pattern of
+        TagPattern patternTag patternArity vars ->
+            if tag == patternTag && arity == patternArity then
+                Just (List.zip vars values)
+
+            else
+                Nothing
+
+        AnyPattern ->
+            Just []
