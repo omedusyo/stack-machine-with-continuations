@@ -101,6 +101,7 @@ type Value
     | TupleValue Int (List Value) -- invariant: for `TupleValue n values` we require `n == List.length values`
       -- Stack/Continuation
     | StackValue Env Stack
+    | DelimitedStackValue Env DelimitedStack
       -- First class environments
     | EnvValue Env
 
@@ -119,6 +120,7 @@ type Predicate
     | IsTagged
     | IsTuple
     | IsStack
+    | IsDelimitedStack
     | IsEnv
 
 
@@ -155,6 +157,10 @@ type Computation
       -- Stack/Current Continuation
     | SaveStack { var : VarName, body : Computation }
     | RestoreStackWith Computation Computation -- `restore-stack-with k` comp This is like function application, but we're "applying" a frozen stack `restoreStack k v`
+      -- Delimited Continuations
+    | Reset { body : Computation }
+    | Shift { var : VarName, body : Computation }
+    | RestoreDelimitedStackWith Computation Computation
       -- First class environments
     | Let Computation { var : VarName, body : Computation } -- let x = e; body
       -- What's the point of having
@@ -190,6 +196,9 @@ type StackElement
       -- Stack/Current Continuation
     | RestoreStackWithLeftHole Computation -- restoreStack _ M
     | RestoreStackWithRightHole Value -- restoreStack V _
+      -- Delimited Continuations
+    | RestoreDelimitedStackWithLeftHole Computation
+    | RestoreDelimitedStackWithRightHole Value
       -- Environment restoration after closure application/stack save is done
     | RestoreEnv Env
       -- First class environments
@@ -199,23 +208,64 @@ type StackElement
     | LogLeftHole Computation -- log _ M
 
 
-type alias Stack =
+type alias DelimitedStack =
     List StackElement
 
 
+type alias Stack =
+    { currentDelimitedStack : DelimitedStack, savedDelimitedStacks : List DelimitedStack }
+
+
+emptyStack : Stack
+emptyStack =
+    { currentDelimitedStack = [], savedDelimitedStacks = [] }
+
+
 pushStack : StackElement -> Stack -> Stack
-pushStack stackEl stack =
-    stackEl :: stack
+pushStack stackEl ({ currentDelimitedStack } as stack) =
+    { stack | currentDelimitedStack = stackEl :: currentDelimitedStack }
 
 
 popStack : Stack -> Maybe ( StackElement, Stack )
-popStack stack0 =
-    case stack0 of
+popStack ({ currentDelimitedStack, savedDelimitedStacks } as stack) =
+    case currentDelimitedStack of
+        [] ->
+            case savedDelimitedStacks of
+                [] ->
+                    Nothing
+
+                delimitedStack :: savedDelimitedStacks1 ->
+                    case delimitedStack of
+                        [] ->
+                            -- Can I assume this branch will never occur?
+                            -- So that I don't need to pop recursively until I find a non-empty saved delimited stack?
+                            Nothing
+
+                        el :: delimitedStack1 ->
+                            Just ( el, { stack | currentDelimitedStack = delimitedStack1, savedDelimitedStacks = savedDelimitedStacks1 } )
+
+        el :: currentDelimitedStack1 ->
+            Just ( el, { stack | currentDelimitedStack = currentDelimitedStack1 } )
+
+
+delimitStack : Stack -> Stack
+delimitStack ({ currentDelimitedStack, savedDelimitedStacks } as stack) =
+    { currentDelimitedStack = [], savedDelimitedStacks = currentDelimitedStack :: savedDelimitedStacks }
+
+
+resetToDelimitedStack : DelimitedStack -> Stack -> Stack
+resetToDelimitedStack delimitedStack ({ currentDelimitedStack, savedDelimitedStacks } as stack) =
+    { currentDelimitedStack = delimitedStack, savedDelimitedStacks = currentDelimitedStack :: savedDelimitedStacks }
+
+
+shiftStack : Stack -> Maybe ( DelimitedStack, Stack )
+shiftStack ({ currentDelimitedStack, savedDelimitedStacks } as stack) =
+    case savedDelimitedStacks of
         [] ->
             Nothing
 
-        el :: stack1 ->
-            Just ( el, stack1 )
+        delimitedStack :: savedDelimitedStacks1 ->
+            Just ( currentDelimitedStack, { stack | currentDelimitedStack = delimitedStack, savedDelimitedStacks = savedDelimitedStacks1 } )
 
 
 type alias Console =
@@ -238,6 +288,26 @@ setCurrentComputation currentComputation state =
 push : StackElement -> State -> State
 push stackEl state =
     { state | stack = pushStack stackEl state.stack }
+
+
+reset : State -> State
+reset state =
+    { state | stack = delimitStack state.stack }
+
+
+resetTo : DelimitedStack -> State -> State
+resetTo delimitedStack state =
+    { state | stack = resetToDelimitedStack delimitedStack state.stack }
+
+
+shift : State -> Result RunTimeError ( DelimitedStack, State )
+shift ({ stack } as state) =
+    case shiftStack stack of
+        Just ( delimitedStack, stack1 ) ->
+            Ok ( delimitedStack, { state | stack = stack1 } )
+
+        Nothing ->
+            Err ShiftingWithoutReset
 
 
 setStack : Stack -> State -> State
@@ -278,10 +348,12 @@ type RunTimeError
     | MatchNotFound
     | ExpectedTuple
     | ExpectedStack
+    | ExpectedDelimitedStack
     | ExpectedEnv
     | TaggedComputationArityMismatch { expected : Int, got : Int }
     | TupleArityMismatch { expected : Int, got : Int }
     | CantProject { tupleSize : Int, index : Int }
+    | ShiftingWithoutReset
     | UnboundVarName VarName
 
 
@@ -296,6 +368,7 @@ smallStepEval state =
             case popStack state.stack of
                 Nothing ->
                     -- Current computation is a value, but the stack is empty, so we terminate
+                    -- TODO: What about shifting the stack?
                     Ok (Right ())
 
                 Just ( stackEl, stack1 ) ->
@@ -455,7 +528,29 @@ combine val stackEl do =
                         )
 
                 _ ->
-                    Err ExpectedClosure
+                    Err ExpectedStack
+
+        -- Delimited Continuations
+        RestoreDelimitedStackWithLeftHole computation1 ->
+            Ok
+                (do (Computation computation1)
+                    |> push (RestoreDelimitedStackWithRightHole val)
+                )
+
+        RestoreDelimitedStackWithRightHole value0 ->
+            case value0 of
+                DelimitedStackValue frozenEnv frozenDelimitedStack ->
+                    -- 1. Push the current env to be restored
+                    -- 2. Reset the current delimited stack to the frozen delim stack and same for the env
+                    Ok
+                        (do (Value val)
+                            |> getEnvironment (\env -> push (RestoreEnv env))
+                            |> resetTo frozenDelimitedStack
+                            |> setEnvironment frozenEnv
+                        )
+
+                _ ->
+                    Err ExpectedDelimitedStack
 
         -- Environment restoration after closure application/stack save is done
         RestoreEnv envToBeRestored ->
@@ -633,6 +728,32 @@ decompose env comp do =
                     |> push (RestoreStackWithLeftHole computation1)
                 )
 
+        -- Delimited Continuations
+        Reset { body } ->
+            Ok
+                (do (Computation body)
+                    |> push (RestoreEnv env)
+                    |> reset
+                )
+
+        Shift { var, body } ->
+            -- capture currently delimited stack and execute `body` with `var := current delimited stack`
+            -- and the restored stack
+            do (Computation body)
+                |> shift
+                |> Result.map
+                    (\( delimitedStack, newState ) ->
+                        newState
+                            |> bind var (DelimitedStackValue env delimitedStack)
+                    )
+                |> Result.map (push (RestoreEnv env))
+
+        RestoreDelimitedStackWith computation0 computation1 ->
+            Ok
+                (do (Computation computation0)
+                    |> push (RestoreDelimitedStackWithLeftHole computation1)
+                )
+
         -- Environments
         Let computation0 { var, body } ->
             Ok
@@ -725,8 +846,16 @@ applyPredicate pred val =
 
             -- Stack/Continuation
             StackValue _ _ ->
-                case IsStack of
+                case pred of
                     IsStack ->
+                        True
+
+                    _ ->
+                        False
+
+            DelimitedStackValue _ _ ->
+                case pred of
+                    IsDelimitedStack ->
                         True
 
                     _ ->

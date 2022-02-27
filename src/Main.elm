@@ -40,7 +40,7 @@ modelFromExample ex =
             { isTerminated = False
             , state =
                 { env = ex.env
-                , stack = []
+                , stack = emptyStack
                 , currentComputation = Computation ex.comp
                 , console = []
                 }
@@ -60,7 +60,7 @@ initModel =
 type Msg
     = StepForward
     | StepBack
-    | Reset
+    | ResetState
     | ExampleSelected Example
 
 
@@ -75,7 +75,7 @@ update msg model =
         StepBack ->
             model |> modelStepBack
 
-        Reset ->
+        ResetState ->
             model |> modelReset
 
         ExampleSelected ex ->
@@ -214,7 +214,7 @@ view model =
                 ]
                 [ H.text ("step back (" ++ String.fromInt model.numOfCurrentlySaved ++ ") <-") ]
             , H.button [ HE.onClick StepForward ] [ H.text "step forward ->" ]
-            , H.button [ HE.onClick Reset ] [ H.text "Reset" ]
+            , H.button [ HE.onClick ResetState ] [ H.text "Reset" ]
             ]
         , gapY 10
         , case model.currentState of
@@ -267,6 +267,9 @@ predicateToString pred =
         IsStack ->
             "isStack"
 
+        IsDelimitedStack ->
+            "isDelimitedStack"
+
         IsEnv ->
             "isEnv"
 
@@ -313,6 +316,9 @@ viewValue val =
 
         StackValue _ _ ->
             viewHiddenValue "stack"
+
+        DelimitedStackValue _ _ ->
+            viewHiddenValue "delimited-stack"
 
         EnvValue _ ->
             viewHiddenValue "env"
@@ -413,7 +419,12 @@ parens html =
 
 brackets : Html Msg -> Html Msg
 brackets html =
-    alignedRow [] [ H.div [ HA.css [ Css.color color.orange ] ] [ H.text "[" ], html, H.div [ HA.css [ Css.color color.pink ] ] [ H.text "]" ] ]
+    alignedRow [] [ H.div [ HA.css [ Css.color color.orange ] ] [ H.text "[" ], html, H.div [ HA.css [ Css.color color.orange ] ] [ H.text "]" ] ]
+
+
+braces : Html Msg -> Html Msg
+braces html =
+    alignedRow [] [ H.div [ HA.css [ Css.color color.pink ] ] [ H.text "{" ], html, H.div [ HA.css [ Css.color color.pink ] ] [ H.text "}" ] ]
 
 
 viewIntOperation2Application : PrimitiveIntOperation2 -> Html Msg -> Html Msg -> Html Msg
@@ -492,6 +503,23 @@ viewRestoreStack html0 html1 =
     parens
         (alignedRow []
             [ viewKeyword "restoreStack"
+            , gapX w
+            , html0
+            , gapX w
+            , html1
+            ]
+        )
+
+
+viewRestoreDelimitedStack : Html Msg -> Html Msg -> Html Msg
+viewRestoreDelimitedStack html0 html1 =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ viewKeyword "restoreDelimStack"
             , gapX w
             , html0
             , gapX w
@@ -620,6 +648,20 @@ viewComputation comp =
         RestoreStackWith computation0 computation1 ->
             viewRestoreStack (viewComputation computation0) (viewComputation computation1)
 
+        Reset { body } ->
+            alignedRow []
+                [ viewKeyword "reset", gapX 5, braces (viewComputation body) ]
+
+        Shift { var, body } ->
+            let
+                w =
+                    5
+            in
+            parens (alignedRow [] [ viewKeyword "shift", gapX w, viewVariable var, gapX w, viewKeyword "->", gapX w, viewComputation body ])
+
+        RestoreDelimitedStackWith computation0 computation1 ->
+            viewRestoreDelimitedStack (viewComputation computation0) (viewComputation computation1)
+
         Let computation { var, body } ->
             viewLet (viewComputation computation) var (viewComputation body)
 
@@ -744,6 +786,15 @@ viewStackElement stackEl =
             -- restoreStack V _
             viewRestoreStack (viewValue value0) viewHole
 
+        -- Delimited Continuations
+        RestoreDelimitedStackWithLeftHole computation1 ->
+            -- restoreStack _ M
+            viewRestoreDelimitedStack viewHole (viewComputation computation1)
+
+        RestoreDelimitedStackWithRightHole value0 ->
+            -- restoreStack V _
+            viewRestoreDelimitedStack (viewValue value0) viewHole
+
         -- Environment restoration after closure application/stack save is done
         RestoreEnv _ ->
             let
@@ -770,15 +821,15 @@ viewEmptyStack =
     viewKeyword "empty-stack"
 
 
-viewStack : Stack -> Html Msg
-viewStack stack =
+viewDelimitedStack : DelimitedStack -> Html Msg
+viewDelimitedStack delimitedStack =
     let
         separator =
             H.div [ HA.css [ Css.color color.blue, Css.margin2 (Css.px 0) (Css.px 7) ] ] [ H.text "::" ]
     in
     row []
         (List.concat
-            [ ((stack
+            [ ((delimitedStack
                     |> List.map
                         (\stackEl ->
                             viewStackElement stackEl
@@ -788,6 +839,20 @@ viewStack stack =
               )
                 |> List.intersperse separator
             ]
+        )
+
+
+viewStack : Stack -> Html Msg
+viewStack stack =
+    let
+        separator =
+            H.div [ HA.css [ Css.color color.blue, Css.margin2 (Css.px 0) (Css.px 7), Css.fontWeight Css.bold ] ] [ H.text "||" ]
+    in
+    alignedRow []
+        (viewDelimitedStack stack.currentDelimitedStack
+            :: (stack.savedDelimitedStacks
+                    |> List.andThen (\delimitedStack -> [ separator, viewDelimitedStack delimitedStack ])
+               )
         )
 
 
@@ -875,6 +940,9 @@ viewRunTimeError err =
                 ExpectedStack ->
                     "Expected Stack"
 
+                ExpectedDelimitedStack ->
+                    "Expected Delimited Stack"
+
                 ExpectedEnv ->
                     "Expected Environment"
 
@@ -904,6 +972,9 @@ viewRunTimeError err =
                         , String.fromInt index
                         , "th element (0-based indexing)"
                         ]
+
+                ShiftingWithoutReset ->
+                    "Shifting without reset"
 
                 UnboundVarName varName ->
                     "Unbound variable name"

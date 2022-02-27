@@ -333,11 +333,69 @@ example19 =
         )
 
 
+example20 : Example
+example20 =
+    example "Delimited continuations 0"
+        (add
+            (Reset
+                { body =
+                    add (c 34) (Shift { var = "k", body = c 12 })
+                }
+            )
+            (c 1)
+        )
+
+
+example21 : Example
+example21 =
+    example "Delimited continuations 1"
+        (add
+            (Reset
+                { body =
+                    add (c 34)
+                        (Shift
+                            { var = "k"
+                            , body =
+                                add (RestoreDelimitedStackWith (VarUse "k") (c 3))
+                                    (RestoreDelimitedStackWith (VarUse "k") (c 4))
+                            }
+                        )
+                }
+            )
+            (c 1)
+        )
+
+
+example22 : Example
+example22 =
+    example "Delimited continuations 2"
+        (Reset
+            { body =
+                Let (c 34)
+                    { var = "x"
+                    , body =
+                        add (VarUse "x")
+                            (Shift
+                                { var = "k"
+                                , body =
+                                    Tagged "pair"
+                                        2
+                                        [ add (RestoreDelimitedStackWith (VarUse "k") (c 3))
+                                            (RestoreDelimitedStackWith (VarUse "k") (c 4))
+                                        , VarUse "x"
+                                        ]
+                                }
+                            )
+                    }
+            }
+        )
+
+
 defaultExample : Example
 defaultExample =
-    example15
+    example22
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22 ]
