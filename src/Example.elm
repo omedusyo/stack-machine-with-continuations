@@ -368,24 +368,39 @@ example21 =
 
 example22 : Example
 example22 =
+    -- let a = 3;
+    -- let b = 4;
+    -- reset {
+    --   let x = 34;
+    --   x + shift { pair(k -> k 3 + k 4, x) }
+    -- }
     example "Delimited continuations 2"
-        (Reset
-            { body =
-                Let (c 34)
-                    { var = "x"
+        (Let (c 3)
+            { var = "a"
+            , body =
+                Let (c 4)
+                    { var = "b"
                     , body =
-                        add (VarUse "x")
-                            (Shift
-                                { var = "k"
-                                , body =
-                                    Tagged "pair"
-                                        2
-                                        [ add (RestoreDelimitedStackWith (VarUse "k") (c 3))
-                                            (RestoreDelimitedStackWith (VarUse "k") (c 4))
-                                        , VarUse "x"
-                                        ]
-                                }
-                            )
+                        Reset
+                            { body =
+                                Let (c 34)
+                                    { var = "x"
+                                    , body =
+                                        add (VarUse "x")
+                                            (Shift
+                                                { var = "k"
+                                                , body =
+                                                    Tagged "pair"
+                                                        2
+                                                        [ add
+                                                            (RestoreDelimitedStackWith (VarUse "k") (VarUse "a"))
+                                                            (RestoreDelimitedStackWith (VarUse "k") (VarUse "b"))
+                                                        , VarUse "x"
+                                                        ]
+                                                }
+                                            )
+                                    }
+                            }
                     }
             }
         )
