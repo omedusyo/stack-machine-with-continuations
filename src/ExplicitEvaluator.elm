@@ -273,7 +273,7 @@ type alias Console =
     List Value
 
 
-type alias State =
+type alias Actor =
     { env : Env
     , stack : Stack
     , currentComputation : CurrentComputation
@@ -281,27 +281,27 @@ type alias State =
     }
 
 
-setCurrentComputation : CurrentComputation -> State -> State
+setCurrentComputation : CurrentComputation -> Actor -> Actor
 setCurrentComputation currentComputation state =
     { state | currentComputation = currentComputation }
 
 
-push : StackElement -> State -> State
+push : StackElement -> Actor -> Actor
 push stackEl state =
     { state | stack = pushStack stackEl state.stack }
 
 
-reset : State -> State
+reset : Actor -> Actor
 reset state =
     { state | stack = delimitStack state.stack }
 
 
-resetTo : DelimitedStack -> State -> State
+resetTo : DelimitedStack -> Actor -> Actor
 resetTo delimitedStack state =
     { state | stack = resetToDelimitedStack delimitedStack state.stack }
 
 
-shift : State -> Result RunTimeError ( DelimitedStack, State )
+shift : Actor -> Result RunTimeError ( DelimitedStack, Actor )
 shift ({ stack } as state) =
     case shiftStack stack of
         Just ( delimitedStack, stack1 ) ->
@@ -311,32 +311,32 @@ shift ({ stack } as state) =
             Err ShiftingWithoutReset
 
 
-setStack : Stack -> State -> State
+setStack : Stack -> Actor -> Actor
 setStack stack state =
     { state | stack = stack }
 
 
-getStack : (Stack -> State -> State) -> State -> State
+getStack : (Stack -> Actor -> Actor) -> Actor -> Actor
 getStack f state =
     f state.stack state
 
 
-setEnvironment : Env -> State -> State
+setEnvironment : Env -> Actor -> Actor
 setEnvironment env state =
     { state | env = env }
 
 
-getEnvironment : (Env -> State -> State) -> State -> State
+getEnvironment : (Env -> Actor -> Actor) -> Actor -> Actor
 getEnvironment f state =
     f state.env state
 
 
-bind : VarName -> Value -> State -> State
+bind : VarName -> Value -> Actor -> Actor
 bind varName value state =
     { state | env = state.env |> insertEnv varName value }
 
 
-log : Value -> State -> State
+log : Value -> Actor -> Actor
 log value state =
     { state | console = value :: state.console }
 
@@ -362,7 +362,7 @@ type RunTimeError
 -- Right () means the computation has terminated
 
 
-smallStepEval : State -> Result RunTimeError (Either State ())
+smallStepEval : Actor -> Result RunTimeError (Either Actor ())
 smallStepEval state =
     case state.currentComputation of
         Value val ->
@@ -398,7 +398,7 @@ smallStepEval state =
                 |> Result.map Left
 
 
-combine : Value -> StackElement -> (CurrentComputation -> State) -> Result RunTimeError State
+combine : Value -> StackElement -> (CurrentComputation -> Actor) -> Result RunTimeError Actor
 combine val stackEl do =
     -- The only interesting cases are `PrimitiveIntOperation2RightHole`, `IfThenElseHole`, `ApplicationRightHole`, `RestoreStackWithRightHole`, and `RestoreEnv`
     case stackEl of
@@ -613,7 +613,7 @@ applyPrimitiveOp2 op x y =
         )
 
 
-decompose : Env -> Computation -> (CurrentComputation -> State) -> Result RunTimeError State
+decompose : Env -> Computation -> (CurrentComputation -> Actor) -> Result RunTimeError Actor
 decompose env comp do =
     -- The only interesting cases are `VarUse`, `Lambda`, and `SaveStack`
     case comp of
@@ -743,8 +743,8 @@ decompose env comp do =
             do (Computation body)
                 |> shift
                 |> Result.map
-                    (\( delimitedStack, newState ) ->
-                        newState
+                    (\( delimitedStack, newActor ) ->
+                        newActor
                             |> bind var (DelimitedStackValue env delimitedStack)
                     )
                 |> Result.map (push (RestoreEnv env))
