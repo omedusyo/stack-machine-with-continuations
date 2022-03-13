@@ -2,7 +2,7 @@ module ExplicitEvaluator exposing (..)
 
 import Dict exposing (..)
 import List.Extra as List
-import Queue
+import Queue exposing (Queue)
 
 
 
@@ -172,6 +172,8 @@ type Computation
     | WithIn Computation Computation -- with env in body
       -- Console
     | Log Computation Computation
+      -- Actor Model
+    | Receive
 
 
 type CurrentComputation
@@ -278,11 +280,27 @@ type alias Actor =
     , stack : Stack
     , currentComputation : CurrentComputation
     , console : Console
+    , mailbox : Mailbox
+    , isBlocked : Bool
     }
 
 
-setCurrentComputation : CurrentComputation -> Actor -> Actor
-setCurrentComputation currentComputation state =
+type alias Mailbox =
+    Queue Value
+
+
+type alias ActorId =
+    Int
+
+
+type alias ActorMsg =
+    { destination : ActorId
+    , payload : Value
+    }
+
+
+do : CurrentComputation -> Actor -> Actor
+do currentComputation state =
     { state | currentComputation = currentComputation }
 
 
@@ -341,6 +359,26 @@ log value state =
     { state | console = value :: state.console }
 
 
+isMailboxEmpty : Actor -> Bool
+isMailboxEmpty actor =
+    Queue.isEmpty actor.mailbox
+
+
+receive : Actor -> ( Maybe Value, Actor )
+receive actor =
+    case Queue.dequeue actor.mailbox of
+        Nothing ->
+            ( Nothing, { actor | isBlocked = True } )
+
+        Just ( val, newQueue ) ->
+            ( Just val, { actor | mailbox = newQueue, isBlocked = False } )
+
+
+send : Value -> Actor -> Actor
+send val actor =
+    { actor | mailbox = actor.mailbox |> Queue.enqueue val }
+
+
 type RunTimeError
     = ExpectedBoolean
     | ExpectedInteger
@@ -363,10 +401,10 @@ type RunTimeError
 
 
 smallStepEval : Actor -> Result RunTimeError (Either Actor ())
-smallStepEval state =
-    case state.currentComputation of
+smallStepEval actor =
+    case actor.currentComputation of
         Value val ->
-            case popStack state.stack of
+            case popStack actor.stack of
                 Nothing ->
                     -- Current computation is a value, but the stack is empty, so we terminate
                     -- TODO: What about shifting the stack?
@@ -379,46 +417,40 @@ smallStepEval state =
                     combine
                         val
                         stackEl
-                        (\currentComputation ->
-                            state
-                                |> setCurrentComputation currentComputation
-                                |> setStack stack1
-                        )
+                        (actor |> setStack stack1)
                         |> Result.map Left
 
         Computation comp ->
             -- Current computation is not a value, and so it will be decomposed into smaller pieces.
             -- Either additional work will be pushed onto the stack or the current computation will be transformed into a value
-            decompose state.env
+            decompose actor.env
                 comp
-                (\currentComputation0 ->
-                    state
-                        |> setCurrentComputation currentComputation0
-                )
+                actor
                 |> Result.map Left
 
 
-combine : Value -> StackElement -> (CurrentComputation -> Actor) -> Result RunTimeError Actor
-combine val stackEl do =
+combine : Value -> StackElement -> Actor -> Result RunTimeError Actor
+combine val stackEl actor =
     -- The only interesting cases are `PrimitiveIntOperation2RightHole`, `IfThenElseHole`, `ApplicationRightHole`, `RestoreStackWithRightHole`, and `RestoreEnv`
     case stackEl of
         PrimitiveIntOperation2LeftHole op computation1 ->
             -- Ok { env = env, stack = pushStack (PrimitiveIntOperation2RightHole op val) stack, currentComputation = Computation computation1, console = console }
             Ok
-                (do (Computation computation1)
+                (actor
+                    |> do (Computation computation1)
                     |> push (PrimitiveIntOperation2RightHole op val)
                 )
 
         PrimitiveIntOperation2RightHole op value0 ->
             case ( value0, val ) of
                 ( ConstantValue (IntConst x), ConstantValue (IntConst y) ) ->
-                    Ok (do (Value (applyPrimitiveOp2 op x y)))
+                    Ok (actor |> do (Value (applyPrimitiveOp2 op x y)))
 
                 _ ->
                     Err ExpectedInteger
 
         PredicateApplicationHole pred ->
-            Ok (do (Value (applyPredicate pred val)))
+            Ok (actor |> do (Value (applyPredicate pred val)))
 
         -- Bool
         IfThenElseHole leftBranch rightBranch ->
@@ -433,12 +465,13 @@ combine val stackEl do =
                     Err ExpectedBoolean
             )
                 |> Result.map
-                    (\branch -> do (Computation branch.body))
+                    (\branch -> actor |> do (Computation branch.body))
 
         -- Application
         ApplicationLeftHole computation1 ->
             Ok
-                (do (Computation computation1)
+                (actor
+                    |> do (Computation computation1)
                     |> push (ApplicationRightHole val)
                 )
 
@@ -449,7 +482,8 @@ combine val stackEl do =
                     -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
                     -- Also don't forget to push environment cleanup after the closure is evaluated.
                     Ok
-                        (do (Computation body)
+                        (actor
+                            |> do (Computation body)
                             |> getEnvironment (\env -> push (RestoreEnv env))
                             |> bind var val
                         )
@@ -461,11 +495,12 @@ combine val stackEl do =
         TaggedWithHole tag n reversedValues computations0 ->
             case computations0 of
                 [] ->
-                    Ok (do (Value (TaggedValue tag n (List.reverse (val :: reversedValues)))))
+                    Ok (actor |> do (Value (TaggedValue tag n (List.reverse (val :: reversedValues)))))
 
                 computation0 :: computations1 ->
                     Ok
-                        (do (Computation computation0)
+                        (actor
+                            |> do (Computation computation0)
                             |> push (TaggedWithHole tag n (val :: reversedValues) computations1)
                         )
 
@@ -475,7 +510,8 @@ combine val stackEl do =
                     case matchPatternWithBranch tag n values branches of
                         Just { bindings, body } ->
                             Ok
-                                (do (Computation body)
+                                (actor
+                                    |> do (Computation body)
                                     |> getEnvironment (\env -> push (RestoreEnv env))
                                     |> getEnvironment (\env -> setEnvironment (env |> insertsEnv bindings))
                                 )
@@ -490,11 +526,12 @@ combine val stackEl do =
         TupleWithHole n reversedValues computations0 ->
             case computations0 of
                 [] ->
-                    Ok (do (Value (TupleValue n (List.reverse (val :: reversedValues)))))
+                    Ok (actor |> do (Value (TupleValue n (List.reverse (val :: reversedValues)))))
 
                 computation0 :: computations1 ->
                     Ok
-                        (do (Computation computation0)
+                        (actor
+                            |> do (Computation computation0)
                             |> push (TupleWithHole n (val :: reversedValues) computations1)
                         )
 
@@ -503,7 +540,7 @@ combine val stackEl do =
                 TupleValue n values ->
                     case List.getAt k values of
                         Just val0 ->
-                            Ok (do (Value val0))
+                            Ok (actor |> do (Value val0))
 
                         Nothing ->
                             Err (CantProject { tupleSize = n, index = k })
@@ -514,7 +551,8 @@ combine val stackEl do =
         -- Stack/Current Continuation
         RestoreStackWithLeftHole computation1 ->
             Ok
-                (do (Computation computation1)
+                (actor
+                    |> do (Computation computation1)
                     |> push (RestoreStackWithRightHole val)
                 )
 
@@ -523,7 +561,8 @@ combine val stackEl do =
             case value0 of
                 StackValue frozenEnv frozenStack ->
                     Ok
-                        (do (Value val)
+                        (actor
+                            |> do (Value val)
                             |> setStack frozenStack
                             |> setEnvironment frozenEnv
                         )
@@ -534,7 +573,8 @@ combine val stackEl do =
         -- Delimited Continuations
         RestoreDelimitedStackWithLeftHole computation1 ->
             Ok
-                (do (Computation computation1)
+                (actor
+                    |> do (Computation computation1)
                     |> push (RestoreDelimitedStackWithRightHole val)
                 )
 
@@ -544,7 +584,8 @@ combine val stackEl do =
                     -- 1. Push the current env to be restored
                     -- 2. Reset the current delimited stack to the frozen delim stack and same for the env
                     Ok
-                        (do (Value val)
+                        (actor
+                            |> do (Value val)
                             |> getEnvironment (\env -> push (RestoreEnv env))
                             |> resetTo frozenDelimitedStack
                             |> setEnvironment frozenEnv
@@ -556,7 +597,8 @@ combine val stackEl do =
         -- Environment restoration after closure application/stack save is done
         RestoreEnv envToBeRestored ->
             Ok
-                (do (Value val)
+                (actor
+                    |> do (Value val)
                     |> setEnvironment envToBeRestored
                 )
 
@@ -564,7 +606,8 @@ combine val stackEl do =
         -- let-binding
         LetWithLeftHole { var, body } ->
             Ok
-                (do (Computation body)
+                (actor
+                    |> do (Computation body)
                     |> getEnvironment (\env -> push (RestoreEnv env))
                     |> bind var val
                 )
@@ -573,7 +616,8 @@ combine val stackEl do =
             case val of
                 EnvValue env0 ->
                     Ok
-                        (do (Computation computation1)
+                        (actor
+                            |> do (Computation computation1)
                             |> getEnvironment (\env -> push (RestoreEnv env))
                             |> setEnvironment env0
                         )
@@ -584,7 +628,8 @@ combine val stackEl do =
         -- Console
         LogLeftHole computation1 ->
             Ok
-                (do (Computation computation1)
+                (actor
+                    |> do (Computation computation1)
                     |> log val
                 )
 
@@ -613,18 +658,18 @@ applyPrimitiveOp2 op x y =
         )
 
 
-decompose : Env -> Computation -> (CurrentComputation -> Actor) -> Result RunTimeError Actor
-decompose env comp do =
+decompose : Env -> Computation -> Actor -> Result RunTimeError Actor
+decompose env comp actor =
     -- The only interesting cases are `VarUse`, `Lambda`, and `SaveStack`
     case comp of
         ConstantComputation constant ->
-            Ok (do (Value (ConstantValue constant)))
+            Ok (actor |> do (Value (ConstantValue constant)))
 
         -- Variable use
         VarUse varName ->
             case env |> getEnv varName of
                 Just val ->
-                    Ok (do (Value val))
+                    Ok (actor |> do (Value val))
 
                 Nothing ->
                     Err (UnboundVarName varName)
@@ -632,32 +677,36 @@ decompose env comp do =
         -- Primitive arithmetic
         PrimitiveIntOperation2 op computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (PrimitiveIntOperation2LeftHole op computation1)
                 )
 
         PredicateApplication pred computation0 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (PredicateApplicationHole pred)
                 )
 
         -- Bool
         IfThenElse computation leftBranch rightBranch ->
             Ok
-                (do (Computation computation)
+                (actor
+                    |> do (Computation computation)
                     |> push (IfThenElseHole leftBranch rightBranch)
                 )
 
         -- Function type introduction
         Lambda { var, body } ->
             -- The current environment will get captured in the closure
-            Ok (do (Value (ClosureValue env { var = var, body = body })))
+            Ok (actor |> do (Value (ClosureValue env { var = var, body = body })))
 
         -- Function type elimination
         Application computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (ApplicationLeftHole computation1)
                 )
 
@@ -673,17 +722,19 @@ decompose env comp do =
             else
                 case computations0 of
                     [] ->
-                        Ok (do (Value (TaggedValue tag 0 [])))
+                        Ok (actor |> do (Value (TaggedValue tag 0 [])))
 
                     computation0 :: computations1 ->
                         Ok
-                            (do (Computation computation0)
+                            (actor
+                                |> do (Computation computation0)
                                 |> push (TaggedWithHole tag n [] computations1)
                             )
 
         MatchTagged computation0 branches ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (MatchTaggedWithHole branches)
                 )
 
@@ -699,17 +750,19 @@ decompose env comp do =
             else
                 case computations0 of
                     [] ->
-                        Ok (do (Value (TupleValue 0 [])))
+                        Ok (actor |> do (Value (TupleValue 0 [])))
 
                     computation0 :: computations1 ->
                         Ok
-                            (do (Computation computation0)
+                            (actor
+                                |> do (Computation computation0)
                                 |> push (TupleWithHole n [] computations1)
                             )
 
         Project computation0 k ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (ProjectWithHole k)
                 )
 
@@ -718,21 +771,24 @@ decompose env comp do =
             -- Environment is extended with the current stack (continuation)
             -- Also if the computation ever finishes (without a jump via the continuation), we need to remember to delete the continuation binding
             Ok
-                (do (Computation body)
+                (actor
+                    |> do (Computation body)
                     |> push (RestoreEnv env)
                     |> getStack (\stack -> bind var (StackValue env stack))
                 )
 
         RestoreStackWith computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (RestoreStackWithLeftHole computation1)
                 )
 
         -- Delimited Continuations
         Reset { body } ->
             Ok
-                (do (Computation body)
+                (actor
+                    |> do (Computation body)
                     |> push (RestoreEnv env)
                     |> reset
                 )
@@ -740,7 +796,8 @@ decompose env comp do =
         Shift { var, body } ->
             -- capture currently delimited stack and execute `body` with `var := current delimited stack`
             -- and the restored stack
-            do (Computation body)
+            actor
+                |> do (Computation body)
                 |> shift
                 |> Result.map
                     (\( delimitedStack, newActor ) ->
@@ -751,31 +808,51 @@ decompose env comp do =
 
         RestoreDelimitedStackWith computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (RestoreDelimitedStackWithLeftHole computation1)
                 )
 
         -- Environments
         Let computation0 { var, body } ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (LetWithLeftHole { var = var, body = body })
                 )
 
         GetEnv ->
-            Ok (do (Value (EnvValue env)))
+            Ok (actor |> do (Value (EnvValue env)))
 
         WithIn computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (WithInLeftHole computation1)
                 )
 
         -- Console
         Log computation0 computation1 ->
             Ok
-                (do (Computation computation0)
+                (actor
+                    |> do (Computation computation0)
                     |> push (LogLeftHole computation1)
+                )
+
+        -- Actor Model
+        Receive ->
+            Ok
+                (let
+                    ( maybeVal, newActor ) =
+                        receive actor
+                 in
+                 case maybeVal of
+                    Nothing ->
+                        newActor
+
+                    Just val ->
+                        newActor
+                            |> do (Value val)
                 )
 
 

@@ -11,6 +11,7 @@ import Html.Styled.Attributes as HA
 import Html.Styled.Events as HE
 import Json.Decode as Decode
 import List.Extra as List
+import Queue exposing (Queue)
 import Return exposing (Return)
 
 
@@ -32,6 +33,16 @@ type alias Model =
     }
 
 
+isCurrentActorBlocked : Model -> Bool
+isCurrentActorBlocked model =
+    case model.currentActor of
+        Err _ ->
+            True
+
+        Ok { state } ->
+            state.isBlocked
+
+
 modelFromExample : Example -> Return Msg Model
 modelFromExample ex =
     { currentExample = ex
@@ -43,6 +54,8 @@ modelFromExample ex =
                 , stack = emptyStack
                 , currentComputation = Computation ex.comp
                 , console = []
+                , mailbox = ex.mailbox
+                , isBlocked = False
                 }
             }
     , savedActors = []
@@ -213,7 +226,7 @@ view model =
                 , HA.disabled (model.numOfCurrentlySaved == 0)
                 ]
                 [ H.text ("step back (" ++ String.fromInt model.numOfCurrentlySaved ++ ") <-") ]
-            , H.button [ HE.onClick StepForward ] [ H.text "step forward ->" ]
+            , H.button [ HE.onClick StepForward, HA.disabled (isCurrentActorBlocked model) ] [ H.text "step forward ->" ]
             , H.button [ HE.onClick ResetActor ] [ H.text "Reset" ]
             ]
         , gapY 10
@@ -674,6 +687,9 @@ viewComputation comp =
         Log computation0 computation1 ->
             viewLog (viewComputation computation0) (viewComputation computation1)
 
+        Receive ->
+            viewKeyword "receive"
+
 
 viewEnv : Env -> Html Msg
 viewEnv env =
@@ -868,13 +884,23 @@ viewConsole console =
         )
 
 
+viewMailbox : Mailbox -> Html Msg
+viewMailbox q =
+    alignedRow []
+        (q
+            |> Queue.toList
+            |> List.map viewValue
+            |> List.intersperse (row [] [ H.text ",", gapX 15 ])
+        )
+
+
 viewTypeOfCurrentComputation : String -> Html Msg
 viewTypeOfCurrentComputation keyword =
     H.div [ HA.css [ Css.fontWeight Css.bold, Css.color color.blue ] ] [ H.text keyword ]
 
 
 viewActor : Actor -> Bool -> Html Msg
-viewActor { env, stack, currentComputation, console } isTerminated =
+viewActor { env, stack, currentComputation, console, mailbox } isTerminated =
     let
         w =
             Css.px 120
@@ -910,6 +936,10 @@ viewActor { env, stack, currentComputation, console } isTerminated =
         , row []
             [ H.div [ HA.css [ Css.width w ] ] [ H.text "Console" ]
             , viewConsole console
+            ]
+        , row []
+            [ H.div [ HA.css [ Css.width w ] ] [ H.text "Mailbox" ]
+            , viewMailbox mailbox
             ]
         ]
 

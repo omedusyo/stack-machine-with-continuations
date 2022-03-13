@@ -2,21 +2,29 @@ module Example exposing (..)
 
 import Dict exposing (Dict)
 import ExplicitEvaluator exposing (..)
+import Queue exposing (Queue)
 
 
 type alias Example =
-    { name : String, env : Env, comp : Computation }
+    { name : String, env : Env, comp : Computation, mailbox : Mailbox }
 
 
 example : String -> Computation -> Example
 example name comp =
-    { name = name, env = Dict.empty, comp = comp }
+    { name = name, env = Dict.empty, comp = comp, mailbox = Queue.empty }
 
 
 withBinding : VarName -> Value -> Example -> Example
 withBinding varName val ex =
     { ex
         | env = ex.env |> insertEnv varName val
+    }
+
+
+queueMessage : Value -> Example -> Example
+queueMessage val ex =
+    { ex
+        | mailbox = ex.mailbox |> Queue.enqueue val
     }
 
 
@@ -406,11 +414,25 @@ example22 =
         )
 
 
+example23 : Example
+example23 =
+    example "Actors: receive from mailbox"
+        Receive
+        |> queueMessage (cv 5)
+        |> queueMessage (cv 3)
+
+
+example24 : Example
+example24 =
+    example "Actors: receive from empty mailbox and get blocked"
+        Receive
+
+
 defaultExample : Example
 defaultExample =
-    example22
+    example24
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24 ]
