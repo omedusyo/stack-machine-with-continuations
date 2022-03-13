@@ -2,6 +2,7 @@ module ExplicitEvaluator exposing (..)
 
 import Dict exposing (..)
 import List.Extra as List
+import Queue
 
 
 
