@@ -22,7 +22,7 @@ import Return exposing (Return)
 
 type alias Model =
     { currentExample : Example
-    , currentActor : Result RunTimeError { isTerminated : Bool, state : Actor }
+    , currentActor : Actor
 
     -- going backwards
     , savedActors : List Actor
@@ -33,30 +33,16 @@ type alias Model =
     }
 
 
-isCurrentActorBlocked : Model -> Bool
-isCurrentActorBlocked model =
-    case model.currentActor of
-        Err _ ->
-            True
-
-        Ok { state } ->
-            state.isBlocked
-
-
 modelFromExample : Example -> Return Msg Model
 modelFromExample ex =
     { currentExample = ex
     , currentActor =
-        Ok
-            { isTerminated = False
-            , state =
-                { env = ex.env
-                , stack = emptyStack
-                , currentComputation = Computation ex.comp
-                , console = []
-                , mailbox = ex.mailbox
-                , isBlocked = False
-                }
+        ActiveActor
+            { env = ex.env
+            , stack = emptyStack
+            , currentComputation = Computation ex.comp
+            , console = []
+            , mailbox = ex.mailbox
             }
     , savedActors = []
     , numOfCurrentlySaved = 0
@@ -81,9 +67,13 @@ update : Msg -> Model -> Return Msg Model
 update msg model =
     case msg of
         StepForward ->
-            model
-                |> modelSaveCurrentActor
-                |> Return.andThen modelStepForward
+            if isActive model.currentActor then
+                model
+                    |> modelSaveCurrentActor
+                    |> Return.andThen modelStepForward
+
+            else
+                Return.singleton model
 
         StepBack ->
             model |> modelStepBack
@@ -104,50 +94,36 @@ modelStepForward : Model -> Return Msg Model
 modelStepForward ({ currentActor } as model) =
     { model
         | currentActor =
-            currentActor
-                |> Result.andThen
-                    (\decoratedActor ->
-                        smallStepEval decoratedActor.state
-                            |> Result.map
-                                (\newActorOrTerminal ->
-                                    case newActorOrTerminal of
-                                        Left state ->
-                                            { isTerminated = False, state = state }
+            case currentActor of
+                ActiveActor actorState ->
+                    smallStepEval actorState
 
-                                        Right () ->
-                                            { isTerminated = True, state = decoratedActor.state }
-                                )
-                    )
+                _ ->
+                    currentActor
     }
         |> Return.singleton
 
 
 modelSaveCurrentActor : Model -> Return Msg Model
 modelSaveCurrentActor ({ currentActor, savedActors } as model) =
-    case currentActor of
-        Ok { isTerminated, state } ->
-            if isTerminated then
-                -- do not save
-                model |> Return.singleton
+    if isActive currentActor then
+        -- 1. push the current state onto `savedActors`
+        -- 2. if you exceeded tha `numOfMaxSaved`, then you need to remove the oldest state
+        --    otherwise just increment `numOfCurrentlySaved`
+        { model
+            | savedActors =
+                if model.numOfCurrentlySaved >= model.numOfMaxSaved then
+                    currentActor :: removeLast model.savedActors
 
-            else
-                -- 1. push the current state onto `savedActors`
-                -- 2. if you exceeded tha `numOfMaxSaved`, then you need to remove the oldest state
-                --    otherwise just increment `numOfCurrentlySaved`
-                { model
-                    | savedActors =
-                        if model.numOfCurrentlySaved >= model.numOfMaxSaved then
-                            state :: removeLast model.savedActors
+                else
+                    currentActor :: model.savedActors
+            , numOfCurrentlySaved = min (model.numOfCurrentlySaved + 1) model.numOfMaxSaved
+        }
+            |> Return.singleton
 
-                        else
-                            state :: model.savedActors
-                    , numOfCurrentlySaved = min (model.numOfCurrentlySaved + 1) model.numOfMaxSaved
-                }
-                    |> Return.singleton
-
-        Err err ->
-            -- do not save
-            model |> Return.singleton
+    else
+        -- do not save
+        model |> Return.singleton
 
 
 modelStepBack : Model -> Return Msg Model
@@ -156,9 +132,9 @@ modelStepBack ({ savedActors, numOfCurrentlySaved } as model) =
         [] ->
             model |> Return.singleton
 
-        state :: savedActors1 ->
+        actor :: savedActors1 ->
             { model
-                | currentActor = Ok { isTerminated = False, state = state }
+                | currentActor = actor
                 , savedActors = savedActors1
                 , numOfCurrentlySaved = numOfCurrentlySaved - 1 -- If the model is valid, then we should have `numOfCurrentlySaved > 1` in this case, so this is fine
             }
@@ -220,22 +196,25 @@ view model =
             )
         , gapY 20
         , H.div [] [ H.text ("You can use the left/right arrow keys. I save max " ++ String.fromInt model.numOfMaxSaved ++ " states of the machine.") ]
+        , viewState model
+        ]
+
+
+viewState : Model -> Html Msg
+viewState model =
+    col [ HA.css [ Css.border3 (Css.px 1) Css.solid color.black ] ]
+        [ H.strong [] [ H.text "#Actor" ]
         , row []
             [ H.button
                 [ HE.onClick StepBack
                 , HA.disabled (model.numOfCurrentlySaved == 0)
                 ]
                 [ H.text ("step back (" ++ String.fromInt model.numOfCurrentlySaved ++ ") <-") ]
-            , H.button [ HE.onClick StepForward, HA.disabled (isCurrentActorBlocked model) ] [ H.text "step forward ->" ]
+            , H.button [ HE.onClick StepForward, HA.disabled (not (isActive model.currentActor)) ] [ H.text "step forward ->" ]
             , H.button [ HE.onClick ResetActor ] [ H.text "Reset" ]
             ]
         , gapY 10
-        , case model.currentActor of
-            Ok { isTerminated, state } ->
-                viewActor state isTerminated
-
-            Err err ->
-                viewRunTimeError err
+        , viewActor model.currentActor
         ]
 
 
@@ -899,8 +878,8 @@ viewTypeOfCurrentComputation keyword =
     H.div [ HA.css [ Css.fontWeight Css.bold, Css.color color.blue ] ] [ H.text keyword ]
 
 
-viewActor : Actor -> Bool -> Html Msg
-viewActor { env, stack, currentComputation, console, mailbox } isTerminated =
+viewActorState : ActorState -> Html Msg
+viewActorState { env, stack, currentComputation, console, mailbox } =
     let
         w =
             Css.px 120
@@ -916,13 +895,7 @@ viewActor { env, stack, currentComputation, console, mailbox } isTerminated =
                     row []
                         [ viewValue val
                         , gapX 20
-                        , viewTypeOfCurrentComputation
-                            (if isTerminated then
-                                "Value (terminated)"
-
-                             else
-                                "Value"
-                            )
+                        , viewTypeOfCurrentComputation "Value"
                         ]
             ]
         , row []
@@ -942,6 +915,45 @@ viewActor { env, stack, currentComputation, console, mailbox } isTerminated =
             , viewMailbox mailbox
             ]
         ]
+
+
+viewActor : Actor -> Html Msg
+viewActor actor =
+    case actor of
+        ActiveActor actorState ->
+            viewActorState actorState
+
+        BlockedActor actorState ->
+            viewActorState actorState
+
+        TerminatedActor { env, terminalValue, console, mailbox } ->
+            let
+                w =
+                    Css.px 120
+            in
+            col []
+                [ row []
+                    [ H.div [ HA.css [ Css.width w ] ] [ H.text "Result" ]
+                    , viewValue terminalValue
+                    , gapX 20
+                    , viewTypeOfCurrentComputation "Value (Terminated)"
+                    ]
+                , row []
+                    [ H.div [ HA.css [ Css.width w ] ] [ H.text "Env" ]
+                    , viewEnv env
+                    ]
+                , row []
+                    [ H.div [ HA.css [ Css.width w ] ] [ H.text "Console" ]
+                    , viewConsole console
+                    ]
+                , row []
+                    [ H.div [ HA.css [ Css.width w ] ] [ H.text "Mailbox" ]
+                    , viewMailbox mailbox
+                    ]
+                ]
+
+        FailedActor err ->
+            viewRunTimeError err
 
 
 viewRunTimeError : RunTimeError -> Html Msg
