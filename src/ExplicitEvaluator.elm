@@ -56,6 +56,11 @@ type alias Env =
     Dict String (List Value)
 
 
+emptyEnv : Env
+emptyEnv =
+    Dict.empty
+
+
 insertEnv : VarName -> Value -> Env -> Env
 insertEnv varName val env =
     env
@@ -178,6 +183,7 @@ type Computation
       -- Actor Model
     | Receive
     | Send Computation Computation Computation -- send(address, msg); comp  ~>  Send address msg comp
+    | Spawn Computation -- spawn { comp }
 
 
 type CurrentComputation
@@ -282,6 +288,11 @@ type alias Console =
     List Value
 
 
+emptyConsole : Console
+emptyConsole =
+    []
+
+
 type alias ActorState =
     { env : Env
     , stack : Stack
@@ -334,6 +345,11 @@ isActive actor =
 
 type alias Mailbox =
     Queue Value
+
+
+emptyMailbox : Mailbox
+emptyMailbox =
+    Queue.empty
 
 
 type alias ActorId =
@@ -470,6 +486,7 @@ receive actorState =
 sendMessage : MessageInTransit -> State -> State
 sendMessage message ({ messagesInTransit } as state) =
     { state | messagesInTransit = messagesInTransit |> Dict.insert message.messageId message }
+        |> updateNextMessageId
 
 
 deliverPayloadToActor : Value -> Actor -> Actor
@@ -520,6 +537,24 @@ updateNextAddress state =
     { state | nextAddress = state.nextAddress + 1 }
 
 
+spawnActor : Computation -> State -> State
+spawnActor computation ({ nextAddress, actors } as state) =
+    { state
+        | actors =
+            actors
+                |> Dict.insert nextAddress
+                    (ActiveActor
+                        { env = emptyEnv
+                        , stack = emptyStack
+                        , currentComputation = Computation computation
+                        , console = emptyConsole
+                        , mailbox = emptyMailbox
+                        }
+                    )
+    }
+        |> updateNextAddress
+
+
 type RunTimeError
     = ExpectedBoolean
     | ExpectedInteger
@@ -544,7 +579,7 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
         Just actor ->
             case actor of
                 ActiveActor actorState ->
-                    case stepActor nextAddress nextMessageId actorState of
+                    case stepActor nextAddress actorState of
                         Return newActor ->
                             state
                                 |> updateActor currentlySelectedActor newActor
@@ -553,7 +588,11 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
                             state
                                 |> updateActor currentlySelectedActor newActor
                                 |> sendMessage { messageId = state.nextMessageId, destination = destination, payload = payload }
-                                |> updateNextMessageId
+
+                        SpawnActor computation newActor ->
+                            state
+                                |> updateActor currentlySelectedActor newActor
+                                |> spawnActor computation
 
                 _ ->
                     state
@@ -565,10 +604,11 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
 type StepActorResult
     = Return Actor
     | EmitMessage { destination : ActorId, payload : Value } Actor
+    | SpawnActor Computation Actor
 
 
-stepActor : ActorId -> MessageId -> ActorState -> StepActorResult
-stepActor nextAddress nextMessageId actorState =
+stepActor : ActorId -> ActorState -> StepActorResult
+stepActor nextAddress actorState =
     case actorState.currentComputation of
         Value val ->
             case popStack actorState.stack of
@@ -585,7 +625,7 @@ stepActor nextAddress nextMessageId actorState =
         Computation comp ->
             -- Current computation is not a value, and so it will be decomposed into smaller pieces.
             -- Either additional work will be pushed onto the stack or the current computation will be transformed into a value
-            Return (decompose actorState.env comp actorState)
+            decompose nextAddress actorState.env comp actorState
 
 
 combine : Value -> StackElement -> ActorState -> StepActorResult
@@ -854,214 +894,243 @@ applyPrimitiveOp2 op x y =
         )
 
 
-decompose : Env -> Computation -> ActorState -> Actor
-decompose env comp actorState =
-    -- The only interesting cases are `VarUse`, `Lambda`, and `SaveStack`
+decompose : ActorId -> Env -> Computation -> ActorState -> StepActorResult
+decompose nextAddress env comp actorState =
     case comp of
         ConstantComputation constant ->
-            ActiveActor (actorState |> do (Value (ConstantValue constant)))
+            Return <|
+                ActiveActor (actorState |> do (Value (ConstantValue constant)))
 
         -- Variable use
         VarUse varName ->
-            case env |> getEnv varName of
-                Just val ->
-                    ActiveActor (actorState |> do (Value val))
+            Return <|
+                case env |> getEnv varName of
+                    Just val ->
+                        ActiveActor (actorState |> do (Value val))
 
-                Nothing ->
-                    FailedActor (UnboundVarName varName)
+                    Nothing ->
+                        FailedActor (UnboundVarName varName)
 
         -- Primitive arithmetic
         PrimitiveIntOperation2 op computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (PrimitiveIntOperation2LeftHole op computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (PrimitiveIntOperation2LeftHole op computation1)
+                    )
 
         PredicateApplication pred computation0 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (PredicateApplicationHole pred)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (PredicateApplicationHole pred)
+                    )
 
         -- Bool
         IfThenElse computation leftBranch rightBranch ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation)
-                    |> push (IfThenElseHole leftBranch rightBranch)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation)
+                        |> push (IfThenElseHole leftBranch rightBranch)
+                    )
 
         -- Function type introduction
         Lambda { var, body } ->
-            -- The current environment will get captured in the closure
-            ActiveActor (actorState |> do (Value (ClosureValue env { var = var, body = body })))
+            Return <|
+                -- The current environment will get captured in the closure
+                ActiveActor (actorState |> do (Value (ClosureValue env { var = var, body = body })))
 
         -- Function type elimination
         Application computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (ApplicationLeftHole computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (ApplicationLeftHole computation1)
+                    )
 
         -- Tagged Computations
         Tagged tag n computations0 ->
-            let
-                numOfComputations =
-                    List.length computations0
-            in
-            if n /= numOfComputations then
-                FailedActor (TaggedComputationArityMismatch { expected = n, got = numOfComputations })
+            Return <|
+                let
+                    numOfComputations =
+                        List.length computations0
+                in
+                if n /= numOfComputations then
+                    FailedActor (TaggedComputationArityMismatch { expected = n, got = numOfComputations })
 
-            else
-                case computations0 of
-                    [] ->
-                        ActiveActor (actorState |> do (Value (TaggedValue tag 0 [])))
+                else
+                    case computations0 of
+                        [] ->
+                            ActiveActor (actorState |> do (Value (TaggedValue tag 0 [])))
 
-                    computation0 :: computations1 ->
-                        ActiveActor
-                            (actorState
-                                |> do (Computation computation0)
-                                |> push (TaggedWithHole tag n [] computations1)
-                            )
+                        computation0 :: computations1 ->
+                            ActiveActor
+                                (actorState
+                                    |> do (Computation computation0)
+                                    |> push (TaggedWithHole tag n [] computations1)
+                                )
 
         MatchTagged computation0 branches ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (MatchTaggedWithHole branches)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (MatchTaggedWithHole branches)
+                    )
 
         -- Tuple Construction
         Tuple n computations0 ->
-            let
-                numOfComputations =
-                    List.length computations0
-            in
-            if n /= numOfComputations then
-                FailedActor (TupleArityMismatch { expected = n, got = numOfComputations })
+            Return <|
+                let
+                    numOfComputations =
+                        List.length computations0
+                in
+                if n /= numOfComputations then
+                    FailedActor (TupleArityMismatch { expected = n, got = numOfComputations })
 
-            else
-                case computations0 of
-                    [] ->
-                        ActiveActor (actorState |> do (Value (TupleValue 0 [])))
+                else
+                    case computations0 of
+                        [] ->
+                            ActiveActor (actorState |> do (Value (TupleValue 0 [])))
 
-                    computation0 :: computations1 ->
-                        ActiveActor
-                            (actorState
-                                |> do (Computation computation0)
-                                |> push (TupleWithHole n [] computations1)
-                            )
+                        computation0 :: computations1 ->
+                            ActiveActor
+                                (actorState
+                                    |> do (Computation computation0)
+                                    |> push (TupleWithHole n [] computations1)
+                                )
 
         Project computation0 k ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (ProjectWithHole k)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (ProjectWithHole k)
+                    )
 
         -- Stack/Current Continuation
         SaveStack { var, body } ->
-            -- Environment is extended with the current stack (continuation)
-            -- Also if the computation ever finishes (without a jump via the continuation), we need to remember to delete the continuation binding
-            ActiveActor
-                (actorState
-                    |> do (Computation body)
-                    |> push (RestoreEnv env)
-                    |> getStack (\stack -> bind var (StackValue env stack))
-                )
+            Return <|
+                -- Environment is extended with the current stack (continuation)
+                -- Also if the computation ever finishes (without a jump via the continuation), we need to remember to delete the continuation binding
+                ActiveActor
+                    (actorState
+                        |> do (Computation body)
+                        |> push (RestoreEnv env)
+                        |> getStack (\stack -> bind var (StackValue env stack))
+                    )
 
         RestoreStackWith computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (RestoreStackWithLeftHole computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (RestoreStackWithLeftHole computation1)
+                    )
 
         -- Delimited Continuations
         Reset { body } ->
-            ActiveActor
-                (actorState
-                    |> do (Computation body)
-                    |> push (RestoreEnv env)
-                    |> reset
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation body)
+                        |> push (RestoreEnv env)
+                        |> reset
+                    )
 
         Shift { var, body } ->
-            -- capture currently delimited stack and execute `body` with `var := current delimited stack`
-            -- and the restored stack
-            let
-                ( maybeDelimitedStack, newActor ) =
-                    actorState
-                        |> do (Computation body)
-                        |> shift
-            in
-            case maybeDelimitedStack of
-                Just delimitedStack ->
-                    newActor
-                        |> mapActor
-                            (bind var (DelimitedStackValue env delimitedStack)
-                                >> push (RestoreEnv env)
-                            )
+            Return <|
+                -- capture currently delimited stack and execute `body` with `var := current delimited stack`
+                -- and the restored stack
+                let
+                    ( maybeDelimitedStack, newActor ) =
+                        actorState
+                            |> do (Computation body)
+                            |> shift
+                in
+                case maybeDelimitedStack of
+                    Just delimitedStack ->
+                        newActor
+                            |> mapActor
+                                (bind var (DelimitedStackValue env delimitedStack)
+                                    >> push (RestoreEnv env)
+                                )
 
-                Nothing ->
-                    newActor
+                    Nothing ->
+                        newActor
 
         RestoreDelimitedStackWith computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (RestoreDelimitedStackWithLeftHole computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (RestoreDelimitedStackWithLeftHole computation1)
+                    )
 
         -- Environments
         Let computation0 { var, body } ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (LetWithLeftHole { var = var, body = body })
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (LetWithLeftHole { var = var, body = body })
+                    )
 
         GetEnv ->
-            ActiveActor (actorState |> do (Value (EnvValue env)))
+            Return <|
+                ActiveActor (actorState |> do (Value (EnvValue env)))
 
         WithIn computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (WithInLeftHole computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (WithInLeftHole computation1)
+                    )
 
         -- Console
         Log computation0 computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation0)
-                    |> push (LogLeftHole computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push (LogLeftHole computation1)
+                    )
 
         -- Actor Model
         Receive ->
-            let
-                ( maybeVal, newActor ) =
-                    receive actorState
-            in
-            case maybeVal of
-                Nothing ->
-                    newActor
+            Return <|
+                let
+                    ( maybeVal, newActor ) =
+                        receive actorState
+                in
+                case maybeVal of
+                    Nothing ->
+                        newActor
 
-                Just val ->
-                    newActor
-                        |> mapActor (do (Value val))
+                    Just val ->
+                        newActor
+                            |> mapActor (do (Value val))
 
         Send addressComputation messageComputation computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation addressComputation)
-                    |> push (SendLeftHole messageComputation computation1)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation addressComputation)
+                        |> push (SendLeftHole messageComputation computation1)
+                    )
+
+        Spawn computation0 ->
+            SpawnActor computation0 <|
+                -- TODO: I actually need to have the id here... jesus
+                ActiveActor
+                    (actorState
+                        |> do (Value (Address nextAddress))
+                    )
 
 
 applyPredicate : Predicate -> Value -> Value

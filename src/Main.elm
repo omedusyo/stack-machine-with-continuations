@@ -719,6 +719,9 @@ viewComputation comp =
         Send addressComputation messageComputation computation1 ->
             viewSend (viewComputation addressComputation) (viewComputation messageComputation) (viewComputation computation1)
 
+        Spawn computation0 ->
+            alignedRow [] [ viewKeyword "spawn", braces (viewComputation computation0) ]
+
 
 viewEnv : Env -> Html Msg
 viewEnv env =
