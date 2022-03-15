@@ -51,7 +51,8 @@ modelFromExample ex =
                     )
         , currentlySelectedActor = 0
         , nextAddress = ex.nextAddress
-        , messagesInTransit = []
+        , messagesInTransit = Dict.fromList []
+        , nextMessageId = 0
         }
     , savedStates = []
     , numOfCurrentlySaved = 0
@@ -70,13 +71,14 @@ type Msg
     | StepBack
     | ResetState
     | ExampleSelected Example
+    | MessageInTransitClicked MessageInTransit
 
 
 update : Msg -> Model -> Return Msg Model
 update msg model =
     case msg of
         StepForward actorId ->
-            if isCurrentlySelectedActorActive model.currentState then
+            if isActorActive actorId model.currentState then
                 model
                     |> modelSaveCurrentState
                     |> Return.andThen (modelStepForward actorId)
@@ -92,6 +94,9 @@ update msg model =
 
         ExampleSelected ex ->
             modelFromExample ex
+
+        MessageInTransitClicked message ->
+            Return.singleton { model | currentState = model.currentState |> deliverMessage message }
 
 
 modelReset : Model -> Return Msg Model
@@ -200,6 +205,10 @@ view model =
 
 viewState : Model -> Html Msg
 viewState model =
+    let
+        w =
+            Css.px 120
+    in
     col []
         [ row []
             [ H.button
@@ -223,9 +232,10 @@ viewState model =
                             ]
                     )
             )
-
-        -- TODO: message pool
-        , H.text "TODO: messages in transit"
+        , row []
+            [ H.div [ HA.css [ Css.width w ] ] [ H.text "Messages" ]
+            , row [] (model.currentState.messagesInTransit |> Dict.values |> List.map viewMessage)
+            ]
         ]
 
 
@@ -276,6 +286,9 @@ predicateToString pred =
         IsEnv ->
             "isEnv"
 
+        IsAddress ->
+            "isAddress"
+
 
 viewKeyword : String -> Html Msg
 viewKeyword keyword =
@@ -325,6 +338,9 @@ viewValue val =
 
         EnvValue _ ->
             viewHiddenValue "env"
+
+        Address _ ->
+            viewHiddenValue "address"
 
 
 viewHiddenValue : String -> Html Msg
@@ -592,6 +608,26 @@ viewLog html0 html1 =
         )
 
 
+viewSend : Html Msg -> Html Msg -> Html Msg -> Html Msg
+viewSend html0 html1 html2 =
+    let
+        w =
+            5
+    in
+    parens
+        (alignedRow []
+            [ html0
+            , gapX w
+            , viewKeyword "<-"
+            , gapX w
+            , html1
+            , viewKeyword "; "
+            , gapX w
+            , html2
+            ]
+        )
+
+
 viewComputation : Computation -> Html Msg
 viewComputation comp =
     case comp of
@@ -679,6 +715,9 @@ viewComputation comp =
 
         Receive ->
             viewKeyword "receive"
+
+        Send addressComputation messageComputation computation1 ->
+            viewSend (viewComputation addressComputation) (viewComputation messageComputation) (viewComputation computation1)
 
 
 viewEnv : Env -> Html Msg
@@ -819,6 +858,12 @@ viewStackElement stackEl =
         -- Console
         LogLeftHole computation1 ->
             viewLog viewHole (viewComputation computation1)
+
+        SendLeftHole messageComputation computation1 ->
+            viewSend viewHole (viewComputation messageComputation) (viewComputation computation1)
+
+        SendRightHole address computation1 ->
+            viewSend (viewHiddenValue "address") viewHole (viewComputation computation1)
 
 
 viewEmptyStack : Html Msg
@@ -967,6 +1012,22 @@ viewActor actor =
             viewRunTimeError err
 
 
+viewMessage : MessageInTransit -> Html Msg
+viewMessage ({ destination, payload } as message) =
+    row
+        [ HA.css
+            [ Css.border3 (Css.px 1) Css.solid color.blue
+            , Css.padding2 (Css.px 5) (Css.px 8)
+            , Css.backgroundColor color.lightBlue
+            ]
+        , HE.onClick (MessageInTransitClicked message)
+        ]
+        [ viewHiddenValue "address"
+        , gapX 20
+        , viewValue payload
+        ]
+
+
 viewRunTimeError : RunTimeError -> Html Msg
 viewRunTimeError err =
     H.div [ HA.css [ Css.color color.red ] ]
@@ -998,6 +1059,9 @@ viewRunTimeError err =
 
                 ExpectedEnv ->
                     "Expected Environment"
+
+                ExpectedAddress ->
+                    "Expected Address"
 
                 TaggedComputationArityMismatch { expected, got } ->
                     String.concat

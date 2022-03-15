@@ -105,6 +105,8 @@ type Value
     | DelimitedStackValue Env DelimitedStack
       -- First class environments
     | EnvValue Env
+      -- Address
+    | Address ActorId
 
 
 type PrimitiveIntOperation2
@@ -123,6 +125,7 @@ type Predicate
     | IsStack
     | IsDelimitedStack
     | IsEnv
+    | IsAddress
 
 
 type alias Tag =
@@ -174,6 +177,7 @@ type Computation
     | Log Computation Computation
       -- Actor Model
     | Receive
+    | Send Computation Computation Computation -- send(address, msg); comp  ~>  Send address msg comp
 
 
 type CurrentComputation
@@ -209,6 +213,9 @@ type StackElement
     | WithInLeftHole Computation -- with _ in M
       -- Console
     | LogLeftHole Computation -- log _ M
+      -- Actor Model
+    | SendLeftHole Computation Computation -- send(_, msg); comp
+    | SendRightHole ActorId Computation -- send(address, _); comp
 
 
 type alias DelimitedStack =
@@ -333,8 +340,13 @@ type alias ActorId =
     Int
 
 
+type alias MessageId =
+    Int
+
+
 type alias MessageInTransit =
-    { destination : ActorId
+    { messageId : MessageId
+    , destination : ActorId
     , payload : Value
     }
 
@@ -342,8 +354,9 @@ type alias MessageInTransit =
 type alias State =
     { actors : Dict ActorId Actor
     , currentlySelectedActor : ActorId
-    , messagesInTransit : List MessageInTransit
+    , messagesInTransit : Dict MessageId MessageInTransit
     , nextAddress : ActorId
+    , nextMessageId : MessageId
     }
 
 
@@ -357,23 +370,20 @@ isCurrentlySelectedActorActive { actors, currentlySelectedActor } =
             False
 
 
-stepState : State -> State
-stepState ({ actors, currentlySelectedActor } as state) =
-    { state
-        | actors =
-            actors
-                |> Dict.update
-                    currentlySelectedActor
-                    (Maybe.map
-                        (\actor ->
-                            case actor of
-                                ActiveActor actorState ->
-                                    smallStepEval actorState
+isActorActive : ActorId -> State -> Bool
+isActorActive address { actors, currentlySelectedActor } =
+    case Dict.get address actors of
+        Just actor ->
+            isActive actor
 
-                                _ ->
-                                    actor
-                        )
-                    )
+        Nothing ->
+            False
+
+
+updateActor : ActorId -> Actor -> State -> State
+updateActor address actor state =
+    { state
+        | actors = state.actors |> Dict.insert address actor
     }
 
 
@@ -457,9 +467,57 @@ receive actorState =
             ( Nothing, BlockedActor actorState )
 
 
-send : Value -> Actor -> Actor
-send val actor =
-    actor |> mapActor (\actorState -> { actorState | mailbox = actorState.mailbox |> Queue.enqueue val })
+sendMessage : MessageInTransit -> State -> State
+sendMessage message ({ messagesInTransit } as state) =
+    { state | messagesInTransit = messagesInTransit |> Dict.insert message.messageId message }
+
+
+deliverPayloadToActor : Value -> Actor -> Actor
+deliverPayloadToActor val actor =
+    let
+        updateActorState actorState =
+            { actorState | mailbox = actorState.mailbox |> Queue.enqueue val }
+    in
+    case actor of
+        ActiveActor actorState ->
+            ActiveActor (updateActorState actorState)
+
+        BlockedActor actorState ->
+            ActiveActor (updateActorState actorState)
+
+        TerminatedActor terminatedActorState ->
+            TerminatedActor terminatedActorState
+
+        FailedActor err ->
+            FailedActor err
+
+
+deliverMessage : MessageInTransit -> State -> State
+deliverMessage message state =
+    case Dict.get message.destination state.actors of
+        Just actor ->
+            state
+                |> updateActor message.destination (deliverPayloadToActor message.payload actor)
+                |> removeMessage message
+
+        Nothing ->
+            state
+                |> removeMessage message
+
+
+removeMessage : MessageInTransit -> State -> State
+removeMessage { messageId } ({ messagesInTransit } as state) =
+    { state | messagesInTransit = messagesInTransit |> Dict.remove messageId }
+
+
+updateNextMessageId : State -> State
+updateNextMessageId state =
+    { state | nextMessageId = state.nextMessageId + 1 }
+
+
+updateNextAddress : State -> State
+updateNextAddress state =
+    { state | nextAddress = state.nextAddress + 1 }
 
 
 type RunTimeError
@@ -472,6 +530,7 @@ type RunTimeError
     | ExpectedStack
     | ExpectedDelimitedStack
     | ExpectedEnv
+    | ExpectedAddress
     | TaggedComputationArityMismatch { expected : Int, got : Int }
     | TupleArityMismatch { expected : Int, got : Int }
     | CantProject { tupleSize : Int, index : Int }
@@ -479,234 +538,296 @@ type RunTimeError
     | UnboundVarName VarName
 
 
+stepState : State -> State
+stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as state) =
+    case Dict.get currentlySelectedActor actors of
+        Just actor ->
+            case actor of
+                ActiveActor actorState ->
+                    case stepActor nextAddress nextMessageId actorState of
+                        Return newActor ->
+                            state
+                                |> updateActor currentlySelectedActor newActor
 
--- Right () means the computation has terminated
+                        EmitMessage { destination, payload } newActor ->
+                            state
+                                |> updateActor currentlySelectedActor newActor
+                                |> sendMessage { messageId = state.nextMessageId, destination = destination, payload = payload }
+                                |> updateNextMessageId
+
+                _ ->
+                    state
+
+        Nothing ->
+            state
 
 
-smallStepEval : ActorState -> Actor
-smallStepEval actorState =
+type StepActorResult
+    = Return Actor
+    | EmitMessage { destination : ActorId, payload : Value } Actor
+
+
+stepActor : ActorId -> MessageId -> ActorState -> StepActorResult
+stepActor nextAddress nextMessageId actorState =
     case actorState.currentComputation of
         Value val ->
             case popStack actorState.stack of
                 Nothing ->
                     -- Current computation is a value, but the stack is empty, so we terminate
-                    TerminatedActor { env = actorState.env, terminalValue = val, console = actorState.console, mailbox = actorState.mailbox }
+                    Return (TerminatedActor { env = actorState.env, terminalValue = val, console = actorState.console, mailbox = actorState.mailbox })
 
                 Just ( stackEl, stack1 ) ->
                     -- Current computation is a value and we have work to do on the stack.
                     -- Based on what's on the stack we either fail or actually do some non-trivial computing
                     -- In either case the top of the stack is consumed
-                    combine
-                        val
-                        stackEl
-                        (actorState |> setStack stack1)
+                    combine val stackEl (actorState |> setStack stack1)
 
         Computation comp ->
             -- Current computation is not a value, and so it will be decomposed into smaller pieces.
             -- Either additional work will be pushed onto the stack or the current computation will be transformed into a value
-            decompose actorState.env comp actorState
+            Return (decompose actorState.env comp actorState)
 
 
-combine : Value -> StackElement -> ActorState -> Actor
+combine : Value -> StackElement -> ActorState -> StepActorResult
 combine val stackEl actorState =
     -- The only interesting cases are `PrimitiveIntOperation2RightHole`, `IfThenElseHole`, `ApplicationRightHole`, `RestoreStackWithRightHole`, and `RestoreEnv`
     case stackEl of
         PrimitiveIntOperation2LeftHole op computation1 ->
             -- Ok { env = env, stack = pushStack (PrimitiveIntOperation2RightHole op val) stack, currentComputation = Computation computation1, console = console }
-            ActiveActor
-                (actorState
-                    |> do (Computation computation1)
-                    |> push (PrimitiveIntOperation2RightHole op val)
+            Return
+                (ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                        |> push (PrimitiveIntOperation2RightHole op val)
+                    )
                 )
 
         PrimitiveIntOperation2RightHole op value0 ->
-            case ( value0, val ) of
-                ( ConstantValue (IntConst x), ConstantValue (IntConst y) ) ->
-                    ActiveActor (actorState |> do (Value (applyPrimitiveOp2 op x y)))
+            Return <|
+                case ( value0, val ) of
+                    ( ConstantValue (IntConst x), ConstantValue (IntConst y) ) ->
+                        ActiveActor (actorState |> do (Value (applyPrimitiveOp2 op x y)))
 
-                _ ->
-                    FailedActor ExpectedInteger
+                    _ ->
+                        FailedActor ExpectedInteger
 
         PredicateApplicationHole pred ->
-            ActiveActor (actorState |> do (Value (applyPredicate pred val)))
+            Return <|
+                ActiveActor (actorState |> do (Value (applyPredicate pred val)))
 
         -- Bool
         IfThenElseHole leftBranch rightBranch ->
-            case val of
-                ConstantValue TrueConst ->
-                    ActiveActor (actorState |> do (Computation leftBranch.body))
+            Return <|
+                case val of
+                    ConstantValue TrueConst ->
+                        ActiveActor (actorState |> do (Computation leftBranch.body))
 
-                ConstantValue FalseConst ->
-                    ActiveActor (actorState |> do (Computation rightBranch.body))
+                    ConstantValue FalseConst ->
+                        ActiveActor (actorState |> do (Computation rightBranch.body))
 
-                _ ->
-                    FailedActor ExpectedBoolean
+                    _ ->
+                        FailedActor ExpectedBoolean
 
         -- Application
         ApplicationLeftHole computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation1)
-                    |> push (ApplicationRightHole val)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                        |> push (ApplicationRightHole val)
+                    )
 
         ApplicationRightHole value0 ->
-            -- This is applying a closure to a value case (`value0` is the closure, `val` is the argument)
-            case value0 of
-                ClosureValue frozenEnv { var, body } ->
-                    -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
-                    -- Also don't forget to push environment cleanup after the closure is evaluated.
-                    ActiveActor
-                        (actorState
-                            |> do (Computation body)
-                            |> getEnvironment (\env -> push (RestoreEnv env))
-                            |> bind var val
-                        )
+            Return <|
+                -- This is applying a closure to a value case (`value0` is the closure, `val` is the argument)
+                case value0 of
+                    ClosureValue frozenEnv { var, body } ->
+                        -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
+                        -- Also don't forget to push environment cleanup after the closure is evaluated.
+                        ActiveActor
+                            (actorState
+                                |> do (Computation body)
+                                |> getEnvironment (\env -> push (RestoreEnv env))
+                                |> bind var val
+                            )
 
-                _ ->
-                    FailedActor ExpectedClosure
+                    _ ->
+                        FailedActor ExpectedClosure
 
         -- TaggedComputation
         TaggedWithHole tag n reversedValues computations0 ->
-            case computations0 of
-                [] ->
-                    ActiveActor (actorState |> do (Value (TaggedValue tag n (List.reverse (val :: reversedValues)))))
+            Return <|
+                case computations0 of
+                    [] ->
+                        ActiveActor (actorState |> do (Value (TaggedValue tag n (List.reverse (val :: reversedValues)))))
 
-                computation0 :: computations1 ->
-                    ActiveActor
-                        (actorState
-                            |> do (Computation computation0)
-                            |> push (TaggedWithHole tag n (val :: reversedValues) computations1)
-                        )
+                    computation0 :: computations1 ->
+                        ActiveActor
+                            (actorState
+                                |> do (Computation computation0)
+                                |> push (TaggedWithHole tag n (val :: reversedValues) computations1)
+                            )
 
         MatchTaggedWithHole branches ->
-            case val of
-                TaggedValue tag n values ->
-                    case matchPatternWithBranch tag n values branches of
-                        Just { bindings, body } ->
-                            ActiveActor
-                                (actorState
-                                    |> do (Computation body)
-                                    |> getEnvironment (\env -> push (RestoreEnv env))
-                                    |> getEnvironment (\env -> setEnvironment (env |> insertsEnv bindings))
-                                )
+            Return <|
+                case val of
+                    TaggedValue tag n values ->
+                        case matchPatternWithBranch tag n values branches of
+                            Just { bindings, body } ->
+                                ActiveActor
+                                    (actorState
+                                        |> do (Computation body)
+                                        |> getEnvironment (\env -> push (RestoreEnv env))
+                                        |> getEnvironment (\env -> setEnvironment (env |> insertsEnv bindings))
+                                    )
 
-                        Nothing ->
-                            FailedActor MatchNotFound
+                            Nothing ->
+                                FailedActor MatchNotFound
 
-                _ ->
-                    FailedActor ExpectedTaggedValue
+                    _ ->
+                        FailedActor ExpectedTaggedValue
 
         -- Tuples
         TupleWithHole n reversedValues computations0 ->
-            case computations0 of
-                [] ->
-                    ActiveActor (actorState |> do (Value (TupleValue n (List.reverse (val :: reversedValues)))))
+            Return <|
+                case computations0 of
+                    [] ->
+                        ActiveActor (actorState |> do (Value (TupleValue n (List.reverse (val :: reversedValues)))))
 
-                computation0 :: computations1 ->
-                    ActiveActor
-                        (actorState
-                            |> do (Computation computation0)
-                            |> push (TupleWithHole n (val :: reversedValues) computations1)
-                        )
+                    computation0 :: computations1 ->
+                        ActiveActor
+                            (actorState
+                                |> do (Computation computation0)
+                                |> push (TupleWithHole n (val :: reversedValues) computations1)
+                            )
 
         ProjectWithHole k ->
-            case val of
-                TupleValue n values ->
-                    case List.getAt k values of
-                        Just val0 ->
-                            ActiveActor (actorState |> do (Value val0))
+            Return <|
+                case val of
+                    TupleValue n values ->
+                        case List.getAt k values of
+                            Just val0 ->
+                                ActiveActor (actorState |> do (Value val0))
 
-                        Nothing ->
-                            FailedActor (CantProject { tupleSize = n, index = k })
+                            Nothing ->
+                                FailedActor (CantProject { tupleSize = n, index = k })
 
-                _ ->
-                    FailedActor ExpectedTuple
+                    _ ->
+                        FailedActor ExpectedTuple
 
         -- Stack/Current Continuation
         RestoreStackWithLeftHole computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation1)
-                    |> push (RestoreStackWithRightHole val)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                        |> push (RestoreStackWithRightHole val)
+                    )
 
         RestoreStackWithRightHole value0 ->
             -- This is restoring the stack `value0` with current computation := val
-            case value0 of
-                StackValue frozenEnv frozenStack ->
-                    ActiveActor
-                        (actorState
-                            |> do (Value val)
-                            |> setStack frozenStack
-                            |> setEnvironment frozenEnv
-                        )
+            Return <|
+                case value0 of
+                    StackValue frozenEnv frozenStack ->
+                        ActiveActor
+                            (actorState
+                                |> do (Value val)
+                                |> setStack frozenStack
+                                |> setEnvironment frozenEnv
+                            )
 
-                _ ->
-                    FailedActor ExpectedStack
+                    _ ->
+                        FailedActor ExpectedStack
 
         -- Delimited Continuations
         RestoreDelimitedStackWithLeftHole computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation1)
-                    |> push (RestoreDelimitedStackWithRightHole val)
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                        |> push (RestoreDelimitedStackWithRightHole val)
+                    )
 
         RestoreDelimitedStackWithRightHole value0 ->
-            case value0 of
-                DelimitedStackValue frozenEnv frozenDelimitedStack ->
-                    -- 1. Push the current env to be restored
-                    -- 2. Reset the current delimited stack to the frozen delim stack and same for the env
-                    ActiveActor
-                        (actorState
-                            |> do (Value val)
-                            |> getEnvironment (\env -> push (RestoreEnv env))
-                            |> resetTo frozenDelimitedStack
-                            |> setEnvironment frozenEnv
-                        )
+            Return <|
+                case value0 of
+                    DelimitedStackValue frozenEnv frozenDelimitedStack ->
+                        -- 1. Push the current env to be restored
+                        -- 2. Reset the current delimited stack to the frozen delim stack and same for the env
+                        ActiveActor
+                            (actorState
+                                |> do (Value val)
+                                |> getEnvironment (\env -> push (RestoreEnv env))
+                                |> resetTo frozenDelimitedStack
+                                |> setEnvironment frozenEnv
+                            )
 
-                _ ->
-                    FailedActor ExpectedDelimitedStack
+                    _ ->
+                        FailedActor ExpectedDelimitedStack
 
         -- Environment restoration after closure application/stack save is done
         RestoreEnv envToBeRestored ->
-            ActiveActor
-                (actorState
-                    |> do (Value val)
-                    |> setEnvironment envToBeRestored
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Value val)
+                        |> setEnvironment envToBeRestored
+                    )
 
         -- First class environents
         -- let-binding
         LetWithLeftHole { var, body } ->
-            ActiveActor
-                (actorState
-                    |> do (Computation body)
-                    |> getEnvironment (\env -> push (RestoreEnv env))
-                    |> bind var val
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation body)
+                        |> getEnvironment (\env -> push (RestoreEnv env))
+                        |> bind var val
+                    )
 
         WithInLeftHole computation1 ->
-            case val of
-                EnvValue env0 ->
-                    ActiveActor
-                        (actorState
-                            |> do (Computation computation1)
-                            |> getEnvironment (\env -> push (RestoreEnv env))
-                            |> setEnvironment env0
-                        )
+            Return <|
+                case val of
+                    EnvValue env0 ->
+                        ActiveActor
+                            (actorState
+                                |> do (Computation computation1)
+                                |> getEnvironment (\env -> push (RestoreEnv env))
+                                |> setEnvironment env0
+                            )
 
-                _ ->
-                    FailedActor ExpectedEnv
+                    _ ->
+                        FailedActor ExpectedEnv
 
         -- Console
         LogLeftHole computation1 ->
-            ActiveActor
-                (actorState
-                    |> do (Computation computation1)
-                    |> log val
-                )
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                        |> log val
+                    )
+
+        -- Actor Model
+        SendLeftHole messageComputation computation1 ->
+            Return <|
+                case val of
+                    Address addressValue ->
+                        ActiveActor
+                            (actorState
+                                |> do (Computation messageComputation)
+                                |> push (SendRightHole addressValue computation1)
+                            )
+
+                    _ ->
+                        FailedActor ExpectedAddress
+
+        SendRightHole address computation1 ->
+            EmitMessage { destination = address, payload = val } <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation1)
+                    )
 
 
 boolToConstant : Bool -> Constant
@@ -935,6 +1056,13 @@ decompose env comp actorState =
                     newActor
                         |> mapActor (do (Value val))
 
+        Send addressComputation messageComputation computation1 ->
+            ActiveActor
+                (actorState
+                    |> do (Computation addressComputation)
+                    |> push (SendLeftHole messageComputation computation1)
+                )
+
 
 applyPredicate : Predicate -> Value -> Value
 applyPredicate pred val =
@@ -1023,6 +1151,14 @@ applyPredicate pred val =
             EnvValue _ ->
                 case pred of
                     IsEnv ->
+                        True
+
+                    _ ->
+                        False
+
+            Address _ ->
+                case pred of
+                    IsAddress ->
                         True
 
                     _ ->

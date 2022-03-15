@@ -519,13 +519,31 @@ example25 =
                     (add (c 7) (c 7))
                 )
             )
+        |> addActor
+            (exampleActor
+                (add (c 3) (c 18))
+            )
+
+
+example26 : Example
+example26 =
+    example "Actors: communication 0"
+        |> addActor
+            (exampleActor
+                (Send (VarUse "actorBelow") (c 6) (add (c 3) (c 2)))
+                |> withBinding "actorBelow" (Address 1)
+            )
+        |> addActor
+            (exampleActor
+                Receive
+            )
 
 
 defaultExample : Example
 defaultExample =
-    example25
+    example26
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25, example26 ]
