@@ -343,6 +343,7 @@ type alias State =
     { actors : Dict ActorId Actor
     , currentlySelectedActor : ActorId
     , messagesInTransit : List MessageInTransit
+    , nextAddress : ActorId
     }
 
 

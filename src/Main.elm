@@ -38,18 +38,19 @@ modelFromExample ex =
     { currentExample = ex
     , currentState =
         { actors =
-            Dict.fromList
-                [ ( 0
-                  , ActiveActor
-                        { env = ex.env
-                        , stack = emptyStack
-                        , currentComputation = Computation ex.comp
-                        , console = []
-                        , mailbox = ex.mailbox
-                        }
-                  )
-                ]
+            ex.actors
+                |> Dict.map
+                    (\address exActor ->
+                        ActiveActor
+                            { env = exActor.env
+                            , stack = emptyStack
+                            , currentComputation = Computation exActor.comp
+                            , console = []
+                            , mailbox = exActor.mailbox
+                            }
+                    )
         , currentlySelectedActor = 0
+        , nextAddress = ex.nextAddress
         , messagesInTransit = []
         }
     , savedStates = []
