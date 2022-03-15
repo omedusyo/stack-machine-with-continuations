@@ -555,11 +555,18 @@ example27 =
             )
 
 
+example28 : Example
+example28 =
+    example "Actors: self"
+        |> addActor
+            (exampleActor (Send Self (c 123) (add Receive (c 1))))
+
+
 defaultExample : Example
 defaultExample =
-    example27
+    example28
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25, example26, example27 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25, example26, example27, example28 ]

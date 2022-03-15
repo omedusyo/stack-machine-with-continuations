@@ -184,6 +184,9 @@ type Computation
     | Receive
     | Send Computation Computation Computation -- send(address, msg); comp  ~>  Send address msg comp
     | Spawn Computation -- spawn { comp }
+    | Self
+      -- Loop
+    | Halt Computation
 
 
 type CurrentComputation
@@ -222,6 +225,8 @@ type StackElement
       -- Actor Model
     | SendLeftHole Computation Computation -- send(_, msg); comp
     | SendRightHole ActorId Computation -- send(address, _); comp
+      -- Loops
+    | HaltHole
 
 
 type alias DelimitedStack =
@@ -579,7 +584,7 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
         Just actor ->
             case actor of
                 ActiveActor actorState ->
-                    case stepActor nextAddress actorState of
+                    case stepActor nextAddress currentlySelectedActor actorState of
                         Return newActor ->
                             state
                                 |> updateActor currentlySelectedActor newActor
@@ -607,8 +612,8 @@ type StepActorResult
     | SpawnActor Computation Actor
 
 
-stepActor : ActorId -> ActorState -> StepActorResult
-stepActor nextAddress actorState =
+stepActor : ActorId -> ActorId -> ActorState -> StepActorResult
+stepActor nextAddress currentAddress actorState =
     case actorState.currentComputation of
         Value val ->
             case popStack actorState.stack of
@@ -625,7 +630,7 @@ stepActor nextAddress actorState =
         Computation comp ->
             -- Current computation is not a value, and so it will be decomposed into smaller pieces.
             -- Either additional work will be pushed onto the stack or the current computation will be transformed into a value
-            decompose nextAddress actorState.env comp actorState
+            decompose nextAddress actorState.env comp currentAddress actorState
 
 
 combine : Value -> StackElement -> ActorState -> StepActorResult
@@ -869,6 +874,11 @@ combine val stackEl actorState =
                         |> do (Computation computation1)
                     )
 
+        -- Loops
+        HaltHole ->
+            Return <|
+                TerminatedActor { env = actorState.env, terminalValue = val, console = actorState.console, mailbox = actorState.mailbox }
+
 
 boolToConstant : Bool -> Constant
 boolToConstant b =
@@ -894,8 +904,8 @@ applyPrimitiveOp2 op x y =
         )
 
 
-decompose : ActorId -> Env -> Computation -> ActorState -> StepActorResult
-decompose nextAddress env comp actorState =
+decompose : ActorId -> Env -> Computation -> ActorId -> ActorState -> StepActorResult
+decompose nextAddress env comp currentAddress actorState =
     case comp of
         ConstantComputation constant ->
             Return <|
@@ -1126,10 +1136,25 @@ decompose nextAddress env comp actorState =
 
         Spawn computation0 ->
             SpawnActor computation0 <|
-                -- TODO: I actually need to have the id here... jesus
                 ActiveActor
                     (actorState
                         |> do (Value (Address nextAddress))
+                    )
+
+        Self ->
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Value (Address currentAddress))
+                    )
+
+        -- Loops
+        Halt computation0 ->
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation computation0)
+                        |> push HaltHole
                     )
 
 

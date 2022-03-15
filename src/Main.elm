@@ -628,6 +628,11 @@ viewSend html0 html1 html2 =
         )
 
 
+viewHalt : Html Msg -> Html Msg
+viewHalt html0 =
+    parens (alignedRow [] [ viewKeyword "halt", gapX 15, html0 ])
+
+
 viewComputation : Computation -> Html Msg
 viewComputation comp =
     case comp of
@@ -721,6 +726,12 @@ viewComputation comp =
 
         Spawn computation0 ->
             alignedRow [] [ viewKeyword "spawn", braces (viewComputation computation0) ]
+
+        Self ->
+            viewKeyword "self"
+
+        Halt computation0 ->
+            viewHalt (viewComputation computation0)
 
 
 viewEnv : Env -> Html Msg
@@ -867,6 +878,9 @@ viewStackElement stackEl =
 
         SendRightHole address computation1 ->
             viewSend (viewHiddenValue "address") viewHole (viewComputation computation1)
+
+        HaltHole ->
+            viewHalt viewHole
 
 
 viewEmptyStack : Html Msg
