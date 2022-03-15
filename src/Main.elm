@@ -22,10 +22,10 @@ import Return exposing (Return)
 
 type alias Model =
     { currentExample : Example
-    , currentActor : Actor
+    , currentState : State
 
     -- going backwards
-    , savedActors : List Actor
+    , savedStates : List State
 
     -- in a valid model `numOfCurrentlySaved == List.length previousActors` invariant is maintained
     , numOfCurrentlySaved : Int
@@ -36,15 +36,23 @@ type alias Model =
 modelFromExample : Example -> Return Msg Model
 modelFromExample ex =
     { currentExample = ex
-    , currentActor =
-        ActiveActor
-            { env = ex.env
-            , stack = emptyStack
-            , currentComputation = Computation ex.comp
-            , console = []
-            , mailbox = ex.mailbox
-            }
-    , savedActors = []
+    , currentState =
+        { actors =
+            Dict.fromList
+                [ ( 0
+                  , ActiveActor
+                        { env = ex.env
+                        , stack = emptyStack
+                        , currentComputation = Computation ex.comp
+                        , console = []
+                        , mailbox = ex.mailbox
+                        }
+                  )
+                ]
+        , currentlySelectedActor = 0
+        , messagesInTransit = []
+        }
+    , savedStates = []
     , numOfCurrentlySaved = 0
     , numOfMaxSaved = 40
     }
@@ -57,20 +65,20 @@ initModel =
 
 
 type Msg
-    = StepForward
+    = StepForward ActorId
     | StepBack
-    | ResetActor
+    | ResetState
     | ExampleSelected Example
 
 
 update : Msg -> Model -> Return Msg Model
 update msg model =
     case msg of
-        StepForward ->
-            if isActive model.currentActor then
+        StepForward actorId ->
+            if isCurrentlySelectedActorActive model.currentState then
                 model
-                    |> modelSaveCurrentActor
-                    |> Return.andThen modelStepForward
+                    |> modelSaveCurrentState
+                    |> Return.andThen (modelStepForward actorId)
 
             else
                 Return.singleton model
@@ -78,7 +86,7 @@ update msg model =
         StepBack ->
             model |> modelStepBack
 
-        ResetActor ->
+        ResetState ->
             model |> modelReset
 
         ExampleSelected ex ->
@@ -90,52 +98,41 @@ modelReset model =
     modelFromExample model.currentExample
 
 
-modelStepForward : Model -> Return Msg Model
-modelStepForward ({ currentActor } as model) =
+modelStepForward : ActorId -> Model -> Return Msg Model
+modelStepForward address ({ currentState } as model) =
     { model
-        | currentActor =
-            case currentActor of
-                ActiveActor actorState ->
-                    smallStepEval actorState
-
-                _ ->
-                    currentActor
+        | currentState = currentState |> selectActor address |> stepState
     }
         |> Return.singleton
 
 
-modelSaveCurrentActor : Model -> Return Msg Model
-modelSaveCurrentActor ({ currentActor, savedActors } as model) =
-    if isActive currentActor then
-        -- 1. push the current state onto `savedActors`
-        -- 2. if you exceeded tha `numOfMaxSaved`, then you need to remove the oldest state
-        --    otherwise just increment `numOfCurrentlySaved`
-        { model
-            | savedActors =
-                if model.numOfCurrentlySaved >= model.numOfMaxSaved then
-                    currentActor :: removeLast model.savedActors
+modelSaveCurrentState : Model -> Return Msg Model
+modelSaveCurrentState ({ currentState, savedStates } as model) =
+    -- 1. push the current state onto `savedStates`
+    -- 2. if you exceeded tha `numOfMaxSaved`, then you need to remove the oldest state
+    --    otherwise just increment `numOfCurrentlySaved`
+    { model
+        | savedStates =
+            if model.numOfCurrentlySaved >= model.numOfMaxSaved then
+                currentState :: removeLast model.savedStates
 
-                else
-                    currentActor :: model.savedActors
-            , numOfCurrentlySaved = min (model.numOfCurrentlySaved + 1) model.numOfMaxSaved
-        }
-            |> Return.singleton
-
-    else
-        -- do not save
-        model |> Return.singleton
+            else
+                currentState :: model.savedStates
+        , numOfCurrentlySaved = min (model.numOfCurrentlySaved + 1) model.numOfMaxSaved
+    }
+        |> Return.singleton
 
 
 modelStepBack : Model -> Return Msg Model
-modelStepBack ({ savedActors, numOfCurrentlySaved } as model) =
-    case savedActors of
+modelStepBack ({ savedStates, numOfCurrentlySaved } as model) =
+    case savedStates of
         [] ->
             model |> Return.singleton
 
-        actor :: savedActors1 ->
+        state :: savedStates1 ->
             { model
-                | currentActor = actor
-                , savedActors = savedActors1
+                | currentState = state
+                , savedStates = savedStates1
                 , numOfCurrentlySaved = numOfCurrentlySaved - 1 -- If the model is valid, then we should have `numOfCurrentlySaved > 1` in this case, so this is fine
             }
                 |> Return.singleton
@@ -202,19 +199,32 @@ view model =
 
 viewState : Model -> Html Msg
 viewState model =
-    col [ HA.css [ Css.border3 (Css.px 1) Css.solid color.black ] ]
-        [ H.strong [] [ H.text "#Actor" ]
-        , row []
+    col []
+        [ row []
             [ H.button
                 [ HE.onClick StepBack
                 , HA.disabled (model.numOfCurrentlySaved == 0)
                 ]
                 [ H.text ("step back (" ++ String.fromInt model.numOfCurrentlySaved ++ ") <-") ]
-            , H.button [ HE.onClick StepForward, HA.disabled (not (isActive model.currentActor)) ] [ H.text "step forward ->" ]
-            , H.button [ HE.onClick ResetActor ] [ H.text "Reset" ]
+            , H.button [ HE.onClick ResetState ] [ H.text "Reset" ]
             ]
-        , gapY 10
-        , viewActor model.currentActor
+        , col []
+            (model.currentState.actors
+                |> Dict.toList
+                |> List.map
+                    (\( address, actor ) ->
+                        col [ HA.css [ Css.border3 (Css.px 1) Css.solid color.black ] ]
+                            [ H.strong [] [ H.text (String.concat [ "#Actor(", String.fromInt address, ")" ]) ]
+                            , row []
+                                [ H.button [ HE.onClick (StepForward address), HA.disabled (not (isActive actor)) ] [ H.text "step forward ->" ] ]
+                            , gapY 10
+                            , viewActor actor
+                            ]
+                    )
+            )
+
+        -- TODO: message pool
+        , H.text "TODO: messages in transit"
         ]
 
 
@@ -1049,7 +1059,7 @@ subscriptions model =
             |> Decode.andThen
                 (\keyCode ->
                     if keyCode == "ArrowRight" then
-                        Decode.succeed StepForward
+                        Decode.succeed (StepForward model.currentState.currentlySelectedActor)
 
                     else if keyCode == "ArrowLeft" then
                         Decode.succeed StepBack

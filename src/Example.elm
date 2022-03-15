@@ -430,7 +430,7 @@ example24 =
 
 defaultExample : Example
 defaultExample =
-    example24
+    example0
 
 
 examples : List Example

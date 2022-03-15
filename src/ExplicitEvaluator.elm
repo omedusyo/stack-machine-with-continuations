@@ -341,8 +341,44 @@ type alias MessageInTransit =
 
 type alias State =
     { actors : Dict ActorId Actor
+    , currentlySelectedActor : ActorId
     , messagesInTransit : List MessageInTransit
     }
+
+
+isCurrentlySelectedActorActive : State -> Bool
+isCurrentlySelectedActorActive { actors, currentlySelectedActor } =
+    case Dict.get currentlySelectedActor actors of
+        Just actor ->
+            isActive actor
+
+        Nothing ->
+            False
+
+
+stepState : State -> State
+stepState ({ actors, currentlySelectedActor } as state) =
+    { state
+        | actors =
+            actors
+                |> Dict.update
+                    currentlySelectedActor
+                    (Maybe.map
+                        (\actor ->
+                            case actor of
+                                ActiveActor actorState ->
+                                    smallStepEval actorState
+
+                                _ ->
+                                    actor
+                        )
+                    )
+    }
+
+
+selectActor : ActorId -> State -> State
+selectActor address state =
+    { state | currentlySelectedActor = address }
 
 
 do : CurrentComputation -> ActorState -> ActorState
