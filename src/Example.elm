@@ -545,11 +545,16 @@ example27 =
         |> addActor
             (exampleActor
                 (Let
-                    (Spawn
-                        (add Receive (c 1))
-                    )
-                    { var = "child"
-                    , body = Send (VarUse "child") (c 5) (add (c 3) (c 5))
+                    (c 1)
+                    { var = "x"
+                    , body =
+                        Let
+                            (Spawn
+                                (add Receive (VarUse "x"))
+                            )
+                            { var = "child"
+                            , body = Send (VarUse "child") (c 5) (add (c 3) (c 5))
+                            }
                     }
                 )
             )
@@ -564,7 +569,7 @@ example28 =
 
 defaultExample : Example
 defaultExample =
-    example28
+    example27
 
 
 examples : List Example

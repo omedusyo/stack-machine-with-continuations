@@ -542,14 +542,14 @@ updateNextAddress state =
     { state | nextAddress = state.nextAddress + 1 }
 
 
-spawnActor : Computation -> State -> State
-spawnActor computation ({ nextAddress, actors } as state) =
+spawnActor : Env -> Computation -> State -> State
+spawnActor env computation ({ nextAddress, actors } as state) =
     { state
         | actors =
             actors
                 |> Dict.insert nextAddress
                     (ActiveActor
-                        { env = emptyEnv
+                        { env = env
                         , stack = emptyStack
                         , currentComputation = Computation computation
                         , console = emptyConsole
@@ -594,10 +594,10 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
                                 |> updateActor currentlySelectedActor newActor
                                 |> sendMessage { messageId = state.nextMessageId, destination = destination, payload = payload }
 
-                        SpawnActor computation newActor ->
+                        SpawnActor env computation newActor ->
                             state
                                 |> updateActor currentlySelectedActor newActor
-                                |> spawnActor computation
+                                |> spawnActor env computation
 
                 _ ->
                     state
@@ -609,7 +609,7 @@ stepState ({ actors, currentlySelectedActor, nextAddress, nextMessageId } as sta
 type StepActorResult
     = Return Actor
     | EmitMessage { destination : ActorId, payload : Value } Actor
-    | SpawnActor Computation Actor
+    | SpawnActor Env Computation Actor
 
 
 stepActor : ActorId -> ActorId -> ActorState -> StepActorResult
@@ -1135,7 +1135,7 @@ decompose nextAddress env comp currentAddress actorState =
                     )
 
         Spawn computation0 ->
-            SpawnActor computation0 <|
+            SpawnActor env computation0 <|
                 ActiveActor
                     (actorState
                         |> do (Value (Address nextAddress))
