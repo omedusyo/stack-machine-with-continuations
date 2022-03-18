@@ -97,10 +97,17 @@ type Constant
     | StringConst String
 
 
+type alias Closure =
+    { env : Env
+    , var : VarName
+    , body : Computation
+    }
+
+
 type Value
     = ConstantValue Constant
       -- Closure
-    | ClosureValue Env { var : VarName, body : Computation }
+    | ClosureValue Closure
       -- Tagged Value
     | TaggedValue Tag Int (List Value)
       -- Tuple
@@ -686,14 +693,15 @@ combine val stackEl actorState =
             Return <|
                 -- This is applying a closure to a value case (`value0` is the closure, `val` is the argument)
                 case value0 of
-                    ClosureValue frozenEnv { var, body } ->
+                    ClosureValue closure ->
                         -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
                         -- Also don't forget to push environment cleanup after the closure is evaluated.
                         ActiveActor
                             (actorState
-                                |> do (Computation body)
+                                |> do (Computation closure.body)
                                 |> getEnvironment (\env -> push (RestoreEnv env))
-                                |> bind var val
+                                |> setEnvironment closure.env
+                                |> bind closure.var val
                             )
 
                     _ ->
@@ -951,7 +959,7 @@ decompose nextAddress env comp currentAddress actorState =
         Lambda { var, body } ->
             Return <|
                 -- The current environment will get captured in the closure
-                ActiveActor (actorState |> do (Value (ClosureValue env { var = var, body = body })))
+                ActiveActor (actorState |> do (Value (ClosureValue { env = env, var = var, body = body })))
 
         -- Function type elimination
         Application computation0 computation1 ->
@@ -1199,7 +1207,7 @@ applyPredicate pred val =
                                 False
 
             -- Closure
-            ClosureValue _ _ ->
+            ClosureValue _ ->
                 case pred of
                     IsClosure ->
                         True

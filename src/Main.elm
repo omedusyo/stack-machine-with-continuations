@@ -321,7 +321,7 @@ viewValue val =
         ConstantValue const ->
             viewConstant const
 
-        ClosureValue _ _ ->
+        ClosureValue _ ->
             viewHiddenValue "closure"
 
         TaggedValue tag _ values ->
