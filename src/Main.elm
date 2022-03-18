@@ -733,6 +733,18 @@ viewComputation comp =
         Halt computation0 ->
             viewHalt (viewComputation computation0)
 
+        Repeat functionComputation stateComputation ->
+            viewRepeat (viewComputation functionComputation) (viewComputation stateComputation)
+
+
+viewRepeat : Html Msg -> Html Msg -> Html Msg
+viewRepeat functionHtml stateHtml =
+    let
+        w =
+            15
+    in
+    parens (alignedRow [] [ viewKeyword "repeat", gapX w, functionHtml, viewKeyword ";", gapX w, stateHtml ])
+
 
 viewEnv : Env -> Html Msg
 viewEnv env =
@@ -881,6 +893,12 @@ viewStackElement stackEl =
 
         HaltHole ->
             viewHalt viewHole
+
+        RepeatLeftHole stateComputation ->
+            viewRepeat viewHole (viewComputation stateComputation)
+
+        Loop _ ->
+            parens (alignedRow [] [ viewKeyword "loop", gapX 15, viewHiddenValue "closure" ])
 
 
 viewEmptyStack : Html Msg

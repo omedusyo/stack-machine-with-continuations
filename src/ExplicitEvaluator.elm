@@ -194,6 +194,7 @@ type Computation
     | Self
       -- Loop
     | Halt Computation
+    | Repeat Computation Computation -- [(repeat f) init-state]
 
 
 type CurrentComputation
@@ -234,6 +235,8 @@ type StackElement
     | SendRightHole ActorId Computation -- send(address, _); comp
       -- Loops
     | HaltHole
+    | RepeatLeftHole Computation
+    | Loop Closure
 
 
 type alias DelimitedStack =
@@ -882,6 +885,27 @@ combine val stackEl actorState =
             Return <|
                 TerminatedActor { env = actorState.env, terminalValue = val, console = actorState.console, mailbox = actorState.mailbox }
 
+        RepeatLeftHole stateComputation ->
+            Return <|
+                case val of
+                    ClosureValue closure ->
+                        ActiveActor
+                            (actorState
+                                |> do (Computation stateComputation)
+                                |> push (Loop closure)
+                            )
+
+                    _ ->
+                        FailedActor ExpectedClosure
+
+        Loop closure ->
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> push (Loop closure)
+                        |> application val closure
+                    )
+
 
 application : Value -> Closure -> ActorState -> ActorState
 application val closure actorState =
@@ -1169,6 +1193,14 @@ decompose nextAddress env comp currentAddress actorState =
                     (actorState
                         |> do (Computation computation0)
                         |> push HaltHole
+                    )
+
+        Repeat functionComputation stateComputation ->
+            Return <|
+                ActiveActor
+                    (actorState
+                        |> do (Computation functionComputation)
+                        |> push (RepeatLeftHole stateComputation)
                     )
 
 
