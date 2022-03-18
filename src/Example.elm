@@ -578,11 +578,40 @@ example29 =
             )
 
 
+example30 : Example
+example30 =
+    example "Actors: Stop/Increment actor"
+        |> addActor
+            (exampleActor
+                (Send Self (Tagged "inc" 0 []) <|
+                    Send Self (Tagged "stop" 0 []) <|
+                        Repeat
+                            (Lambda
+                                { var = "x"
+                                , body =
+                                    MatchTagged
+                                        Receive
+                                        [ { pattern = TagPattern "inc" 0 []
+                                          , body =
+                                                Send Self (Tagged "inc" 0 []) <|
+                                                    add (VarUse "x") (c 1)
+                                          }
+                                        , { pattern = TagPattern "stop" 0 []
+                                          , body = Halt (VarUse "x")
+                                          }
+                                        ]
+                                }
+                            )
+                            (c 0)
+                )
+            )
+
+
 defaultExample : Example
 defaultExample =
-    example29
+    example30
 
 
 examples : List Example
 examples =
-    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25, example26, example27, example28, example29 ]
+    [ example0, example1, example2, example3, example4, example5, example6, example7, example8, example9, example10, example11, example12, example13, example14, example15, example16, example17, example18, example19, example20, example21, example22, example23, example24, example25, example26, example27, example28, example29, example30 ]
