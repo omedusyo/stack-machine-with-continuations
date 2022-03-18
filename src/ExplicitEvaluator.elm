@@ -694,14 +694,9 @@ combine val stackEl actorState =
                 -- This is applying a closure to a value case (`value0` is the closure, `val` is the argument)
                 case value0 of
                     ClosureValue closure ->
-                        -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
-                        -- Also don't forget to push environment cleanup after the closure is evaluated.
                         ActiveActor
                             (actorState
-                                |> do (Computation closure.body)
-                                |> getEnvironment (\env -> push (RestoreEnv env))
-                                |> setEnvironment closure.env
-                                |> bind closure.var val
+                                |> application val closure
                             )
 
                     _ ->
@@ -886,6 +881,17 @@ combine val stackEl actorState =
         HaltHole ->
             Return <|
                 TerminatedActor { env = actorState.env, terminalValue = val, console = actorState.console, mailbox = actorState.mailbox }
+
+
+application : Value -> Closure -> ActorState -> ActorState
+application val closure actorState =
+    -- Evaluate the body of the closure in the closure's environment extended with the argument bound to the closure's parameter.
+    -- Also don't forget to push environment cleanup after the closure is evaluated.
+    actorState
+        |> do (Computation closure.body)
+        |> getEnvironment (\env -> push (RestoreEnv env))
+        |> setEnvironment closure.env
+        |> bind closure.var val
 
 
 boolToConstant : Bool -> Constant
