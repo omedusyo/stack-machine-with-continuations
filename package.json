@@ -1,0 +1,13 @@
+{
+  "name": "stack-machine-with-continuations",
+  "version": "1.0.0",
+  "description": "WORK IN PROGRESS",
+  "license": "MIT",
+  "author": "Yuriy Dupyn",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "dev": "elm reactor",
+    "build": "rm -rf dist/ && mkdir -p dist && elm make src/Main.elm --output=dist/index.html"
+  }
+}
